@@ -5,9 +5,9 @@
 # RefursWM with extreme values, flood it with objects, take the clipboard from the background, steal
 # the focus and keep the session from going idle while hidden. Then, with a normal build: who gets
 # the privileged protocols, what the sandbox socket offers. Each check gets a fresh compositor.
-# usage: tests/security.sh TESTING_BIN NORMAL_BIN EVIL OUTDIR   (TESTING_BIN built with -Dtesting=true)
+# usage: tests/security.sh TESTING_BIN NORMAL_BIN EVIL SANDBOX_TEST OUTDIR   (TESTING_BIN: -Dtesting=true)
 set -u
-BIN=$1; NORMAL=$2; EVIL=$3; OUT=$4
+BIN=$1; NORMAL=$2; EVIL=$3; SBXTEST=$4; OUT=$5
 mkdir -p "$OUT"
 R=$OUT/result.txt
 : >"$R"
@@ -146,6 +146,28 @@ elif grep -q wl_compositor "$OUT/registry-sandbox.txt"; then ok "sandbox socket:
 else bad "sandbox socket" "cannot connect"; fi
 if pgrep -P "$WM" -x refurs-launcher >/dev/null; then ok "launcher: running"; else bad launcher "no refurs-launcher child"; fi
 stop privileges
+
+# ---- the compositor is sandboxed, the programs it starts are not
+export REFURS_STARTUP="/usr/bin/sleep 30"
+start sandbox
+unset REFURS_STARTUP
+sleep 1
+st() { awk -v k="$2:" '$1 == k {print $2}' "/proc/$1/status"; }
+# a container may already filter every process (Docker does): count filters relative to this shell
+BASE=$(st $$ Seccomp_filters)
+LA=$(pgrep -P "$WM" -x refurs-launcher)
+CH=$(pgrep -P "${LA:-0}" -x sleep)
+if [ "$(st "$WM" NoNewPrivs)" = 1 ] && [ "$(st "$WM" Seccomp_filters)" = $((BASE + 1)) ]; then ok "compositor: no_new_privs + its seccomp filter"
+else bad compositor "NoNewPrivs=$(st "$WM" NoNewPrivs) filters=$(st "$WM" Seccomp_filters), shell has $BASE"; fi
+if [ -n "$LA" ] && [ -n "$CH" ] && [ "$(st "$LA" NoNewPrivs)" = 0 ] && [ "$(st "$CH" NoNewPrivs)" = 0 ] &&
+	[ "$(st "$LA" Seccomp_filters)" = "$BASE" ] && [ "$(st "$CH" Seccomp_filters)" = "$BASE" ]; then
+	ok "launched programs: unrestricted (sudo and swaylock work)"
+else bad "launched programs" "launcher=$LA child=$CH NoNewPrivs=$(st "${CH:-1}" NoNewPrivs) filters=$(st "${CH:-1}" Seccomp_filters), shell has $BASE"; fi
+if grep -q "sandbox: landlock" "$LOG"; then ok "$(grep -o "sandbox: .*" "$LOG")"; else bad sandbox "$(grep -o "sandbox: .*" "$LOG")"; fi
+stop sandbox
+pkill -x sleep
+"$SBXTEST" "$OUT/sandbox-scratch" >"$OUT/sandbox-test.txt" 2>&1
+while read -r line; do case $line in PASS*) ok "${line#PASS }" ;; FAIL*) bad "${line#FAIL }" ;; esac; done <"$OUT/sandbox-test.txt"
 
 echo "failures: $fails" | tee -a "$R"
 exit "$fails"

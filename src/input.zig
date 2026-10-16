@@ -84,9 +84,11 @@ const Keyboard = struct {
     }
 
     fn handle(k: *Keyboard, keycode: u32) bool {
+        // no keymap (a virtual keyboard sent a bad one, or shm ran out): nothing to match
+        const state = k.wlr.xkb_state orelse return false;
         // Ctrl+Alt+Fn switches VTs even while locked (the locker stays on its VT)
         var tsyms: [*c]const c.xkb_keysym_t = null;
-        const nt = c.xkb_state_key_get_syms(k.wlr.xkb_state, keycode, &tsyms);
+        const nt = c.xkb_state_key_get_syms(state, keycode, &tsyms);
         for (0..@intCast(@max(nt, 0))) |i| {
             const sym = tsyms[i];
             if (sym >= c.XKB_KEY_XF86Switch_VT_1 and sym <= c.XKB_KEY_XF86Switch_VT_12) {

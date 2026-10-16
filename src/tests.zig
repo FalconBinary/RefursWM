@@ -5,4 +5,6 @@
 test {
     _ = @import("layout.zig");
     _ = @import("policy.zig");
+    _ = @import("seccomp.zig");
+    _ = @import("landlock.zig");
 }

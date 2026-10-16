@@ -259,6 +259,7 @@ pub fn main() u8 {
     const rt = cfg.realtime and sandbox.realtime();
     sandbox.dropCaps();
     sandbox.noDump();
+    sandbox.early();
 
     c.wlr_log_init(if (c.getenv("REFURS_DEBUG") != null) c.WLR_DEBUG else c.WLR_ERROR, null);
 
@@ -282,6 +283,7 @@ pub fn main() u8 {
     wm.themeHooks();
     inline for (cfg.autostart) |cmd| launcher.spawn(cmd, false);
     launcher.startup();
+    sandbox.late();
 
     c.wl_display_run(s.display);
 

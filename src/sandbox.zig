@@ -1,11 +1,14 @@
 // Copyright (c) 2026 Denys (FalconBinary)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Process hardening of the compositor and the launcher.
+//! Process hardening of the compositor and the launcher. The launcher is forked before any of the
+//! restrictions below, so the programs it starts (terminals, sudo, swaylock) are unaffected.
 const std = @import("std");
 const linux = std.os.linux;
 const wm = @import("wm.zig");
 const c = wm.c;
+const landlock = @import("landlock.zig");
+const seccomp = @import("seccomp.zig");
 
 const CapHeader = extern struct { version: u32, pid: c_int };
 const CapData = extern struct { effective: u32, permitted: u32, inheritable: u32 };
@@ -59,4 +62,39 @@ pub fn raiseFdLimit() void {
 pub fn realtime() bool {
     var p: c.struct_sched_param = .{ .sched_priority = c.sched_get_priority_min(c.SCHED_RR) };
     return c.sched_setscheduler(0, c.SCHED_RR | c.SCHED_RESET_ON_FORK, &p) == 0;
+}
+
+// ------------------------------------------------------------------ sandbox
+
+/// REFURS_SANDBOX=0 turns it off, to tell a sandbox denial from a bug on new hardware.
+fn enabled() bool {
+    const v = c.getenv("REFURS_SANDBOX") orelse return true;
+    return !std.mem.eql(u8, std.mem.span(v), "0");
+}
+
+var landlock_abi: u32 = 0;
+
+/// Right after the launcher is forked, before wlroots starts (no threads yet): no_new_privs and the
+/// startup Landlock domain. Every thread Mesa creates later inherits both.
+pub fn early() void {
+    if (!enabled()) return;
+    if (linux.errno(linux.prctl(@intFromEnum(linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0)) != .SUCCESS) return;
+    landlock_abi = landlock.apply(.startup, landlock.Env.fromProcess());
+}
+
+const SockFprog = extern struct { len: u16, filter: [*]const seccomp.Insn };
+
+/// Before the event loop: the running Landlock domain stacked on top (no more Wayland sockets or xkb
+/// rules) and the seccomp filter on every thread (TSYNC). Logs what is in force.
+pub fn late() void {
+    if (!enabled()) return wm.log("sandbox: off (REFURS_SANDBOX=0)", .{});
+    if (landlock_abi != 0) landlock_abi = landlock.apply(.running, landlock.Env.fromProcess());
+    var buf: [seccomp.max_len]seccomp.Insn = undefined;
+    const prog = seccomp.build(comptime seccomp.native(), @intCast(linux.getpid()), &buf);
+    const fprog: SockFprog = .{ .len = @intCast(prog.len), .filter = prog.ptr };
+    const rc = linux.seccomp(linux.SECCOMP.SET_MODE_FILTER, linux.SECCOMP.FILTER_FLAG.TSYNC, &fprog);
+    const sc = linux.errno(rc) == .SUCCESS and rc == 0;
+    if (landlock_abi != 0) {
+        wm.log("sandbox: landlock (ABI {d}), seccomp {s}", .{ landlock_abi, if (sc) "on" else "FAILED" });
+    } else wm.log("sandbox: landlock unavailable (needs lsm=landlock), seccomp {s}", .{if (sc) "on" else "FAILED"});
 }

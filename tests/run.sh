@@ -24,12 +24,12 @@ for step in "$@"; do
 	build)
 		zbuild testing -Dtesting=true
 		zbuild normal ""
-		zbuild tools evil
+		zbuild tools "evil sandbox-test"
 		;;
 	headless)
 		dock "tests/headless.sh $TESTING /out/headless1; tests/headless2.sh $TESTING /out/headless2; tests/headless3.sh $TESTING /out/headless3"
 		;;
-	security) dock "tests/security.sh $TESTING /cache/normal/bin/refurswm $EVIL /out/security" || true ;;
+	security) dock "tests/security.sh $TESTING /cache/normal/bin/refurswm $EVIL /cache/tools/bin/refurs-sandbox-test /out/security" || true ;;
 	bench) dock "tests/bench.sh $TESTING $EVIL /out/bench" ;;
 	*) echo "unknown step $step" >&2; exit 2 ;;
 	esac

@@ -4,6 +4,7 @@
 //! zig build                    - ReleaseSafe (bounds/overflow checks stay on), pure wlroots
 //! zig build test               - unit tests (pure Zig, run on any host)
 //! zig build evil               - hostile test client for tests/security.sh (Linux)
+//! zig build sandbox-test       - the compositor's sandbox applied to a test program (Linux)
 //! zig build --prefix ~/.local  - install to ~/.local/bin/refurswm
 const std = @import("std");
 
@@ -62,6 +63,18 @@ pub fn build(b: *std.Build) void {
     b.step("run", "run refurswm").dependOn(&run.step);
 
     evil(b, target, optimize);
+
+    // the compositor's sandbox applied to a test program (tests/security.sh)
+    const st_mod = b.createModule(.{
+        .root_source_file = b.path("tests/sandbox_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    st_mod.addImport("landlock", b.createModule(.{ .root_source_file = b.path("src/landlock.zig"), .target = target, .optimize = optimize, .link_libc = true }));
+    st_mod.addImport("seccomp", b.createModule(.{ .root_source_file = b.path("src/seccomp.zig"), .target = target, .optimize = optimize }));
+    const st = b.addExecutable(.{ .name = "refurs-sandbox-test", .root_module = st_mod });
+    b.step("sandbox-test", "build the sandbox test program").dependOn(&b.addInstallArtifact(st, .{}).step);
 }
 
 /// A protocol XML: a file in this repo or a path inside the wayland-protocols data dir.
