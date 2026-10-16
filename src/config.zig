@@ -1,0 +1,169 @@
+//! Конфиг RefursWM. Он компилируется прямо в бинарник: поправил → `zig build` → перезапустил.
+//! Никакого парсинга файлов при старте и никакой перезагрузки на лету — ноль работы в рантайме.
+//! Ошибка в конфиге = ошибка компиляции, а не сюрприз после входа в сессию.
+const t = @import("types.zig");
+const Mod = t.Mod;
+const rgba = t.rgba;
+
+// ------------------------------------------------------------------ вид
+
+/// Тема при запуске; переключается хоткеем (toggle_theme).
+pub const theme: t.Theme = .dark;
+
+pub const dark = t.Palette{
+    .active = rgba(0x89b4faff),
+    .inactive = rgba(0x45475aff),
+    .background = rgba(0x1e1e2eff),
+};
+pub const light = t.Palette{
+    .active = rgba(0x1e66f5ff),
+    .inactive = rgba(0xbcc0ccff),
+    .background = rgba(0xeff1f5ff),
+};
+
+/// Команды при смене темы — чтобы GTK/Qt/порталы тоже стали тёмными/светлыми.
+/// Запускаются напрямую (без shell). Нет программы — тихо пропускается.
+pub const theme_hooks_dark = [_]t.Cmd{
+    &.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" },
+};
+pub const theme_hooks_light = [_]t.Cmd{
+    &.{ "gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-light" },
+};
+
+/// Толщина рамки, пиксели.
+pub const border: i32 = 2;
+/// Зазор между окнами и от краёв экрана.
+pub const gaps_in: i32 = 6;
+pub const gaps_out: i32 = 10;
+
+/// Скругление углов, пиксели. Работает только в сборке `zig build -Dfx=true` (scenefx, GLES2).
+/// В обычной сборке (чистый wlroots) углы прямые и значение игнорируется.
+pub const corner_radius: i32 = 10;
+
+/// Прозрачность активного/неактивного окна (1.0 = непрозрачно).
+/// Совет по скорости: 1.0 оставляет возможность direct scanout (кадр идёт на экран без композитинга).
+pub const active_opacity: f32 = 1.0;
+pub const inactive_opacity: f32 = 1.0;
+
+/// Принудительно рисовать рамки самому (SSD), чтобы приложения не рисовали свои заголовки.
+pub const server_side_decorations = true;
+
+// ------------------------------------------------------------------ раскладка
+
+/// Режим новых рабочих столов: .dwindle (как Hyprland) или .scroll (бесконечная лента колонок).
+pub const default_mode: t.Mode = .dwindle;
+/// Ширина новой колонки в scroll-режиме (доля экрана) и пресеты для cycle_width.
+pub const scroll_width: f32 = 0.5;
+pub const scroll_widths = [_]f32{ 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0 };
+/// true — колонка в фокусе всегда по центру; false — лента сдвигается минимально.
+pub const scroll_center = false;
+
+/// Фокус следует за курсором (без клика).
+pub const focus_follows_mouse = true;
+
+// ------------------------------------------------------------------ ввод
+
+pub const xkb_layout: [*:0]const u8 = "us,ru";
+pub const xkb_variant: [*:0]const u8 = "";
+pub const xkb_options: [*:0]const u8 = "grp:alt_shift_toggle";
+pub const repeat_rate: i32 = 35;
+pub const repeat_delay: i32 = 280;
+
+pub const touchpad_tap = true;
+pub const touchpad_natural_scroll = true;
+pub const touchpad_disable_while_typing = true;
+
+/// null = тема по умолчанию (XCURSOR_THEME).
+pub const cursor_theme: ?[*:0]const u8 = null;
+pub const cursor_size: u32 = 24;
+
+// ------------------------------------------------------------------ мониторы
+
+/// Имена — из `wlr-randr` или лога RefursWM. Не перечисленные включаются в предпочтительном режиме.
+pub const outputs = [_]t.OutputCfg{
+    // .{ .name = "eDP-1", .scale = 1.25 },
+    // .{ .name = "HDMI-A-1", .width = 2560, .height = 1440, .refresh = 144000, .x = 1920, .y = 0 },
+};
+
+// ------------------------------------------------------------------ правила окон
+
+pub const rules = [_]t.Rule{
+    .{ .app_id = "pavucontrol", .float = true },
+    .{ .app_id = "nm-connection-editor", .float = true },
+    // .{ .app_id = "firefox", .workspace = 2 },
+    // .{ .app_id = "foot", .opacity = 0.92 },
+};
+
+// ------------------------------------------------------------------ безопасность
+
+/// Привилегированные протоколы. Выключены = любое приложение НЕ может читать экран,
+/// буфер обмена в фоне, эмулировать клавиатуру/мышь или менять гамму.
+/// Даже включённые, они скрыты от sandbox-клиентов (flatpak и т.п. через security-context-v1).
+pub const allow_screencopy = false; // grim, wf-recorder, OBS
+pub const allow_data_control = false; // менеджеры буфера обмена (cliphist, wl-paste --watch)
+pub const allow_virtual_input = false; // wtype, ydotool-подобные, wayvnc
+pub const allow_gamma_control = false; // gammastep, wlsunset
+
+/// Чем блокировать экран (ext-session-lock-v1). Хоткей `.lock`.
+pub const lock_command: t.Cmd = &.{"swaylock"};
+
+// ------------------------------------------------------------------ автозапуск
+
+pub const autostart = [_]t.Cmd{
+    // &.{"netline"},
+    // &.{ "swaybg", "-i", "/home/user/wall.png" },
+    // &.{ "swayidle", "-w", "timeout", "600", "swaylock" },
+};
+
+// ------------------------------------------------------------------ хоткеи
+
+/// Главный модификатор (Super/Win). Им же: ЛКМ — перетащить окно, ПКМ — изменить размер.
+pub const mod = Mod.super;
+const S = mod;
+const SS = mod | Mod.shift;
+const SC = mod | Mod.ctrl;
+
+pub const terminal: t.Cmd = &.{"foot"};
+pub const launcher: t.Cmd = &.{"fuzzel"};
+
+pub const binds = [_]t.Bind{
+    .{ .mods = S, .key = "Return", .action = .{ .spawn = terminal } },
+    .{ .mods = S, .key = "d", .action = .{ .spawn = launcher } },
+    .{ .mods = S, .key = "q", .action = .close },
+    .{ .mods = SS, .key = "e", .action = .quit },
+    .{ .mods = S, .key = "l", .action = .lock },
+
+    .{ .mods = S, .key = "Left", .action = .{ .focus = .left } },
+    .{ .mods = S, .key = "Right", .action = .{ .focus = .right } },
+    .{ .mods = S, .key = "Up", .action = .{ .focus = .up } },
+    .{ .mods = S, .key = "Down", .action = .{ .focus = .down } },
+    .{ .mods = SS, .key = "Left", .action = .{ .move = .left } },
+    .{ .mods = SS, .key = "Right", .action = .{ .move = .right } },
+    .{ .mods = SS, .key = "Up", .action = .{ .move = .up } },
+    .{ .mods = SS, .key = "Down", .action = .{ .move = .down } },
+    .{ .mods = SC, .key = "Left", .action = .{ .resize = .{ -40, 0 } } },
+    .{ .mods = SC, .key = "Right", .action = .{ .resize = .{ 40, 0 } } },
+    .{ .mods = SC, .key = "Up", .action = .{ .resize = .{ 0, -40 } } },
+    .{ .mods = SC, .key = "Down", .action = .{ .resize = .{ 0, 40 } } },
+
+    .{ .mods = S, .key = "space", .action = .toggle_float },
+    .{ .mods = S, .key = "f", .action = .fullscreen },
+    .{ .mods = S, .key = "Tab", .action = .toggle_mode },
+    .{ .mods = S, .key = "s", .action = .toggle_split },
+    .{ .mods = S, .key = "r", .action = .cycle_width },
+    .{ .mods = S, .key = "bracketleft", .action = .{ .column_merge = .left } },
+    .{ .mods = S, .key = "bracketright", .action = .{ .column_merge = .right } },
+    .{ .mods = S, .key = "backslash", .action = .column_expel },
+    .{ .mods = SS, .key = "t", .action = .toggle_theme },
+} ++ workspaceBinds();
+
+/// Super+1..9 — рабочий стол, Super+Shift+1..9 — отправить окно туда.
+fn workspaceBinds() [18]t.Bind {
+    const keys = [_][:0]const u8{ "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+    var out: [18]t.Bind = undefined;
+    for (keys, 0..) |k, i| {
+        out[i * 2] = .{ .mods = S, .key = k, .action = .{ .workspace = i + 1 } };
+        out[i * 2 + 1] = .{ .mods = SS, .key = k, .action = .{ .move_to_workspace = i + 1 } };
+    }
+    return out;
+}
