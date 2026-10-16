@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! zig build                    - ReleaseSafe (bounds/overflow checks stay on), pure wlroots
-//! zig build -Dfx=true          - + scenefx: rounded corners (GLES2 renderer)
 //! zig build test               - unit tests (pure Zig, run on any host)
 //! zig build evil               - hostile test client for tests/security.sh (Linux)
 //! zig build --prefix ~/.local  - install to ~/.local/bin/refurswm
@@ -11,7 +10,6 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(std.builtin.Optimize, "optimize", "build mode (default safe = ReleaseSafe)") orelse .safe;
-    const fx = b.option(bool, "fx", "link scenefx for rounded corners") orelse false;
 
     const tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/layout.zig"),
@@ -24,23 +22,19 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag != .linux) return;
 
     const opts = b.addOptions();
-    opts.addOption(bool, "fx", fx);
     // test builds only: screencopy + virtual input on regardless of the config (grim/wtype in CI)
     opts.addOption(bool, "testing", b.option(bool, "testing", "enable screencopy and virtual input for tests") orelse false);
 
     const wlr = "wlroots-0.20";
-    const fxlib = "scenefx-0.5";
 
     // wlr_layer_shell_v1.h includes this generated server header
     const layer_h = scan(b, "server-header", b.path("protocol/wlr-layer-shell-unstable-v1.xml"), "wlr-layer-shell-unstable-v1-protocol.h");
 
     const tc = b.addTranslateC(.{ .root_source_file = b.path("src/c.h"), .target = target, .optimize = optimize });
     tc.addIncludePath(layer_h.dirname());
-    if (fx) tc.defineCMacro("REFURS_FX", "1");
     // translate-c needs the same -I as a C compiler; take them from pkg-config
     var pc: std.ArrayList([]const u8) = .empty;
     pc.appendSlice(b.allocator, &.{ "pkg-config", "--cflags-only-I", wlr, "wayland-server", "xkbcommon", "libinput", "pixman-1" }) catch @panic("oom");
-    if (fx) pc.append(b.allocator, fxlib) catch @panic("oom");
     var it = std.mem.tokenizeAny(u8, b.run(pc.items), " \n");
     while (it.next()) |flag| if (std.mem.startsWith(u8, flag, "-I")) tc.addIncludePath(.{ .cwd_relative = flag[2..] });
 
@@ -56,7 +50,6 @@ pub fn build(b: *std.Build) void {
     mod.addImport("c", tc.createModule());
     mod.addOptions("build_options", opts);
     for ([_][]const u8{ wlr, "wayland-server", "xkbcommon", "libinput" }) |lib| mod.linkSystemLibrary(lib, .{});
-    if (fx) mod.linkSystemLibrary(fxlib, .{});
 
     const exe = b.addExecutable(.{ .name = "refurswm", .root_module = mod });
     // hardened binary: PIE + full RELRO + immediate binding

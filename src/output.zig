@@ -26,10 +26,30 @@ pub const Output = struct {
     l_destroy: Listener = zero,
 
     fn onFrame(o: *Output, _: ?*anyopaque) void {
-        _ = c.wlr_scene_output_commit(o.so, null);
+        if (c.wlr_scene_output_needs_frame(o.so)) o.commit();
         var now: c.struct_timespec = undefined;
         _ = c.clock_gettime(c.CLOCK_MONOTONIC, &now);
         c.wlr_scene_output_send_frame_done(o.so, &now);
+    }
+
+    /// wlr_scene_output_commit, plus tearing: a fullscreen window that asked for async presentation
+    /// (games with vsync off) gets immediate page flips; if the driver refuses, vsync as usual.
+    fn commit(o: *Output) void {
+        var st: c.struct_wlr_output_state = undefined;
+        c.wlr_output_state_init(&st);
+        defer c.wlr_output_state_finish(&st);
+        if (!c.wlr_scene_output_build_state(o.so, &st, null)) return;
+        if (cfg.allow_tearing and o.wantsTearing()) {
+            st.tearing_page_flip = true;
+            if (!c.wlr_output_test_state(o.wlr, &st)) st.tearing_page_flip = false;
+        }
+        _ = c.wlr_output_commit_state(o.wlr, &st);
+    }
+
+    fn wantsTearing(o: *Output) bool {
+        const v = s.ws[o.ws].fullscreen orelse return false;
+        return c.wlr_tearing_control_manager_v1_surface_hint_from_surface(s.tearing, v.surface()) ==
+            c.WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC;
     }
 
     fn onRequestState(o: *Output, data: ?*anyopaque) void {
@@ -85,23 +105,23 @@ pub fn onNewOutput(data: ?*anyopaque) void {
     const name = std.mem.span(wo.name);
     const oc = findCfg(name);
 
-    var st: c.struct_wlr_output_state = undefined;
-    c.wlr_output_state_init(&st);
-    defer c.wlr_output_state_finish(&st);
-    c.wlr_output_state_set_enabled(&st, true);
-    if (oc) |x| {
-        if (x.width > 0) {
-            if (pickMode(wo, x)) |m| c.wlr_output_state_set_mode(&st, m) else c.wlr_output_state_set_custom_mode(&st, x.width, x.height, x.refresh);
-        } else if (c.wlr_output_preferred_mode(wo)) |m| c.wlr_output_state_set_mode(&st, m);
-        c.wlr_output_state_set_scale(&st, x.scale);
-    } else if (c.wlr_output_preferred_mode(wo)) |m| c.wlr_output_state_set_mode(&st, m);
-    if (!c.wlr_output_commit_state(wo, &st)) {
-        // the configured mode failed: fall back to the preferred one
-        c.wlr_output_state_finish(&st);
+    // the config as given; then without VRR (not every monitor has it); then the preferred mode
+    const attempts: u8 = if (oc == null) 1 else 3;
+    for (0..attempts) |attempt| {
+        var st: c.struct_wlr_output_state = undefined;
         c.wlr_output_state_init(&st);
+        defer c.wlr_output_state_finish(&st);
         c.wlr_output_state_set_enabled(&st, true);
-        if (c.wlr_output_preferred_mode(wo)) |m| c.wlr_output_state_set_mode(&st, m);
-        _ = c.wlr_output_commit_state(wo, &st);
+        if (oc != null and attempt < 2) {
+            const x = oc.?;
+            if (x.width > 0) {
+                if (pickMode(wo, x)) |m| c.wlr_output_state_set_mode(&st, m) else c.wlr_output_state_set_custom_mode(&st, x.width, x.height, x.refresh);
+            } else if (c.wlr_output_preferred_mode(wo)) |m| c.wlr_output_state_set_mode(&st, m);
+            c.wlr_output_state_set_scale(&st, x.scale);
+            if (x.vrr and attempt == 0) c.wlr_output_state_set_adaptive_sync_enabled(&st, true);
+        } else if (c.wlr_output_preferred_mode(wo)) |m| c.wlr_output_state_set_mode(&st, m);
+        if (c.wlr_output_commit_state(wo, &st)) break;
+        wm.log("output {s}: configuration {d} failed", .{ std.mem.span(wo.name), attempt + 1 });
     }
 
     var ws: u8 = 0;

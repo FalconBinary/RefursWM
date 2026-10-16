@@ -62,7 +62,7 @@ const Keyboard = struct {
 
     fn onKey(k: *Keyboard, data: ?*anyopaque) void {
         const ev = wm.ptr(c.struct_wlr_keyboard_key_event, data);
-        c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
+        activity(ev.time_msec, true);
         const code = ev.keycode;
         // evdev codes end at 0x2ff; a virtual keyboard may send any u32
         if (code > 0xffff) return;
@@ -189,6 +189,17 @@ var last_x: f64 = 0;
 var last_y: f64 = 0;
 var cursor_default = false;
 
+/// Pointer motion and scrolling come up to 1000 times a second, and every idle notification re-arms
+/// its timer on each report. Timeouts are seconds or minutes, so once per 100 ms is plenty. Keys and
+/// buttons always count, and the first event after a pause always does, so "resumed" is never late.
+var last_activity: u32 = 0;
+
+fn activity(time: u32, always: bool) void {
+    if (!always and time -% last_activity < 100) return;
+    last_activity = time;
+    c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
+}
+
 fn setDefaultCursor() void {
     if (cursor_default) return;
     cursor_default = true;
@@ -291,7 +302,7 @@ fn motion(time: u32) void {
 
 pub fn onMotion(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_pointer_motion_event, data);
-    c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
+    activity(ev.time_msec, false);
     c.wlr_relative_pointer_manager_v1_send_relative_motion(s.relptr, s.seat, @as(u64, ev.time_msec) * 1000, ev.delta_x, ev.delta_y, ev.unaccel_dx, ev.unaccel_dy);
     c.wlr_cursor_move(s.cursor, &ev.pointer.*.base, ev.delta_x, ev.delta_y);
     motion(ev.time_msec);
@@ -299,7 +310,7 @@ pub fn onMotion(data: ?*anyopaque) void {
 
 pub fn onMotionAbsolute(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_pointer_motion_absolute_event, data);
-    c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
+    activity(ev.time_msec, false);
     c.wlr_cursor_warp_absolute(s.cursor, &ev.pointer.*.base, ev.x, ev.y);
     motion(ev.time_msec);
 }
@@ -311,7 +322,7 @@ fn modHeld() bool {
 
 pub fn onButton(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_pointer_button_event, data);
-    c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
+    activity(ev.time_msec, true);
     if (ev.state == c.WL_POINTER_BUTTON_STATE_PRESSED) {
         const h = wm.hitTest(s.cursor.x, s.cursor.y);
         if (s.locked and !h.lock) return;
@@ -340,7 +351,7 @@ pub fn onButton(data: ?*anyopaque) void {
 
 pub fn onAxis(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_pointer_axis_event, data);
-    c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
+    activity(ev.time_msec, false);
     c.wlr_seat_pointer_notify_axis(s.seat, ev.time_msec, ev.orientation, ev.delta, ev.delta_discrete, ev.source, ev.relative_direction);
 }
 

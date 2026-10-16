@@ -85,7 +85,7 @@ fn setup() !void {
     _ = c.wl_event_loop_add_signal(loop, c.SIGTERM, onTerminate, null);
     _ = c.wl_event_loop_add_signal(loop, c.SIGINT, onTerminate, null);
     s.backend = c.wlr_backend_autocreate(loop, &s.session) orelse return error.Backend;
-    s.renderer = (if (wm.fx) c.fx_renderer_create(s.backend) else c.wlr_renderer_autocreate(s.backend)) orelse return error.Renderer;
+    s.renderer = c.wlr_renderer_autocreate(s.backend) orelse return error.Renderer;
     _ = c.wlr_renderer_init_wl_shm(s.renderer, dsp);
     s.allocator = c.wlr_allocator_autocreate(s.backend, s.renderer) orelse return error.Allocator;
 
@@ -94,6 +94,11 @@ fn setup() !void {
     if (c.wlr_renderer_get_texture_formats(s.renderer, c.WLR_BUFFER_CAP_DMABUF) != null) {
         if (c.wlr_linux_dmabuf_v1_create_with_renderer(dsp, 5, s.renderer)) |dmabuf| c.wlr_scene_set_linux_dmabuf_v1(s.scene, dmabuf);
     }
+    // explicit sync: clients hand over fences instead of implicit GPU synchronisation (Vulkan, NVK)
+    const drm_fd = c.wlr_renderer_get_drm_fd(s.renderer);
+    if (drm_fd >= 0 and s.renderer.*.features.timeline and s.backend.*.features.timeline)
+        _ = c.wlr_linux_drm_syncobj_manager_v1_create(dsp, 1, drm_fd);
+    s.tearing = c.wlr_tearing_control_manager_v1_create(dsp, 1) orelse return error.Tearing;
     _ = c.wlr_compositor_create(dsp, 6, s.renderer);
     _ = c.wlr_subcompositor_create(dsp);
     _ = c.wlr_data_device_manager_create(dsp);

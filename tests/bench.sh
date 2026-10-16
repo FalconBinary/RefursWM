@@ -36,9 +36,7 @@ note "memory: PSS $pss kB (processes: $(echo $procs | wc -w)), compositor RSS $(
 a=$(cpu "$WM"); sleep 10; b=$(cpu "$WM")
 note "idle: $((b - a)) CPU ticks in 10 s"
 
-# a window on screen and an idle daemon with two timeouts, as on a real desktop
-foot >/dev/null 2>&1 &
-sleep 1.5
+# an idle daemon with two timeouts, as on a real desktop; the motion runs over a window of its own
 swayidle -w timeout 300 true timeout 600 true >/dev/null 2>&1 &
 sleep 0.5
 a=$(cpu "$WM"); "$EVIL" motion 2000 >/dev/null; b=$(cpu "$WM")
@@ -52,7 +50,6 @@ if command -v strace >/dev/null; then
 	kill -INT $ST; wait $ST
 	note "syscalls for 2000 motions: $(awk '$NF == "total" {print $4}' "$OUT/strace.txt"), of them timerfd_settime: $(awk '$NF == "timerfd_settime" {print $4}' "$OUT/strace.txt")"
 fi
-pkill -x foot
 # headless has no keyboard: hold a virtual one so the window gets keyboard focus
 "$EVIL" keyboard 30 >/dev/null 2>&1 &
 sleep 0.3

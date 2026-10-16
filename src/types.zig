@@ -92,4 +92,7 @@ pub const OutputCfg = struct {
     /// null = place automatically
     x: ?i32 = null,
     y: ?i32 = null,
+    /// variable refresh rate (FreeSync/G-Sync compatible): less stutter and latency in games;
+    /// some panels flicker with it, so it is opt-in per monitor
+    vrr: bool = false,
 };

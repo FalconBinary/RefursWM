@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! xdg-shell toplevels and popups.
-//! A view's scene tree sits at the window-geometry origin: borders are plain rects around it
-//! (one rounded rect with -Dfx), the client surfaces are a subsurface tree clipped to the slot,
-//! and popups hang off the same tree so they are never clipped and move with the window.
+//! A view's scene tree sits at the window-geometry origin: borders are four plain rects around it,
+//! the client surfaces are a subsurface tree clipped to the slot, and popups hang off the same tree
+//! so they are never clipped and move with the window.
 const std = @import("std");
 const wm = @import("wm.zig");
 const c = wm.c;
@@ -38,9 +38,8 @@ pub const View = struct {
     box: Box = .{},
     sent_w: i32 = 0,
     sent_h: i32 = 0,
-    /// what effects() last applied, so the common case (opaque, square) costs nothing per commit
+    /// what effects() last applied, so the common case (opaque) costs nothing per commit
     cur_opacity: f32 = 1.0,
-    cur_radius: i32 = 0,
     last_geo: Box = .{},
 
     l_map: Listener = zero,
@@ -106,19 +105,6 @@ pub const View = struct {
     }
 
     fn placeBorder(v: *View, inner: Box, bw: i32, bound: Box) void {
-        if (wm.fx) {
-            const r = v.rects[0];
-            if (bw == 0) return c.wlr_scene_rect_set_size(r, 0, 0);
-            c.wlr_scene_node_set_position(&r.node, -bw, -bw);
-            c.wlr_scene_rect_set_size(r, inner.w + 2 * bw, inner.h + 2 * bw);
-            c.wlr_scene_rect_set_corner_radius(r, cfg.corner_radius + bw);
-            // the ring: everything but the window area is drawn
-            c.wlr_scene_rect_set_clipped_region(r, .{
-                .area = .{ .x = bw, .y = bw, .width = inner.w, .height = inner.h },
-                .corners = c.corner_radii_all(cfg.corner_radius),
-            });
-            return;
-        }
         const pieces = [4]Box{
             .{ .x = inner.x - bw, .y = inner.y - bw, .w = inner.w + 2 * bw, .h = bw },
             .{ .x = inner.x - bw, .y = inner.y + inner.h, .w = inner.w + 2 * bw, .h = bw },
@@ -139,35 +125,29 @@ pub const View = struct {
     pub fn recolor(v: *View) void {
         const p = wm.palette();
         const col = wm.premul(if (v.active) p.active else p.inactive);
-        const n: usize = if (wm.fx) 1 else 4;
-        for (v.rects[0..n]) |r| c.wlr_scene_rect_set_color(r, &col);
+        for (v.rects) |r| c.wlr_scene_rect_set_color(r, &col);
     }
 
+    /// Only real changes reach the client: every set_activated is a configure, and most clients
+    /// redraw on each configure.
     pub fn activate(v: *View, on: bool) void {
+        if (v.active == on) return;
         v.active = on;
         _ = c.wlr_xdg_toplevel_set_activated(v.xdg, on);
         v.recolor();
         v.effects();
     }
 
-    /// Opacity (and rounded corners with -Dfx) on the window's buffers.
+    /// Opacity on the window's buffers. Re-applied per commit while not 1.0 (new subsurfaces).
     pub fn effects(v: *View) void {
         const op: f32 = if (v.fullscreen) 1.0 else v.opacity orelse if (v.active) cfg.active_opacity else cfg.inactive_opacity;
-        const rad: i32 = if (wm.fx and !v.fullscreen) cfg.corner_radius else 0;
-        if (op == 1.0 and rad == 0 and v.cur_opacity == 1.0 and v.cur_radius == 0) return;
+        if (op == 1.0 and v.cur_opacity == 1.0) return;
         v.cur_opacity = op;
-        v.cur_radius = rad;
         c.wlr_scene_node_for_each_buffer(&v.content.node, eachBuffer, v);
     }
 
     fn eachBuffer(buf: [*c]c.struct_wlr_scene_buffer, _: c_int, _: c_int, data: ?*anyopaque) callconv(.c) void {
-        const v = wm.ptr(View, data);
-        c.wlr_scene_buffer_set_opacity(buf, v.cur_opacity);
-        if (wm.fx) {
-            // round only the main surface: subsurfaces (video, overlays) stay square
-            const ss = c.wlr_scene_surface_try_from_buffer(buf) orelse return;
-            if (ss.*.surface == v.surface()) c.wlr_scene_buffer_set_corner_radii(buf, c.corner_radii_all(v.cur_radius));
-        }
+        c.wlr_scene_buffer_set_opacity(buf, wm.ptr(View, data).cur_opacity);
     }
 
     // ------------------------------------------------------------ lifecycle
@@ -201,8 +181,10 @@ pub const View = struct {
         if (!v.ruled) v.applyRules();
         if (v.deco) |d| _ = c.wlr_xdg_toplevel_decoration_v1_set_mode(d, c.WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
         _ = c.wlr_xdg_toplevel_set_wm_capabilities(v.xdg, c.WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
+        // an unmapped toplevel is back in its initial state (xdg-shell): nothing was sent yet
         v.sent_w = 0;
         v.sent_h = 0;
+        v.active = false;
         if (v.floating) {
             _ = c.wlr_xdg_toplevel_set_size(v.xdg, 0, 0);
         } else {

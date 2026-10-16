@@ -37,6 +37,8 @@ var enters: u32 = 0;
 var leaves: u32 = 0;
 var last_serial: u32 = 0;
 var configures: u32 = 0;
+/// set the cursor to nothing on pointer enter (no software cursor, so motion needs no new frames)
+var hide_cursor = false;
 
 fn out(comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
@@ -176,8 +178,9 @@ const kb_listener: c.struct_wl_keyboard_listener = .{
     .repeat_info = kbRepeat,
 };
 
-fn ptrEnter(_: ?*anyopaque, _: ?*c.struct_wl_pointer, serial: u32, _: ?*c.struct_wl_surface, _: c.wl_fixed_t, _: c.wl_fixed_t) callconv(.c) void {
+fn ptrEnter(_: ?*anyopaque, p: ?*c.struct_wl_pointer, serial: u32, _: ?*c.struct_wl_surface, _: c.wl_fixed_t, _: c.wl_fixed_t) callconv(.c) void {
     last_serial = serial;
+    if (hide_cursor) c.wl_pointer_set_cursor(p, serial, null, 0, 0);
 }
 fn ptrLeave(_: ?*anyopaque, _: ?*c.struct_wl_pointer, serial: u32, _: ?*c.struct_wl_surface) callconv(.c) void {
     last_serial = serial;
@@ -633,13 +636,20 @@ fn modeVkey() u8 {
     return 0;
 }
 
+/// Moves the pointer inside its own window, which hides the cursor: what remains is the cost of the
+/// motion itself (hit test, focus, motion events, idle bookkeeping), not of redrawing a cursor.
 fn modeMotion(n: u32) u8 {
     if (vptr_mgr == null) return fail("no virtual pointer");
+    hide_cursor = true;
+    _ = mapWindow(false);
     const p = c.zwlr_virtual_pointer_manager_v1_create_virtual_pointer(vptr_mgr, seat);
+    c.zwlr_virtual_pointer_v1_motion_absolute(p, 0, 1, 1, 2, 2);
+    c.zwlr_virtual_pointer_v1_frame(p);
+    _ = pump(300);
     var i: u32 = 0;
     while (i < n) : (i += 1) {
-        const dx: c.wl_fixed_t = if (i % 2 == 0) 256 * 3 else -256 * 3;
-        c.zwlr_virtual_pointer_v1_motion(p, i, dx, 256);
+        const d: c.wl_fixed_t = if (i % 2 == 0) 256 * 3 else -256 * 3;
+        c.zwlr_virtual_pointer_v1_motion(p, i, d, @divTrunc(d, 3));
         c.zwlr_virtual_pointer_v1_frame(p);
         _ = c.wl_display_flush(display);
         _ = c.usleep(1000);

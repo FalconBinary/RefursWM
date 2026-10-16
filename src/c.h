@@ -14,12 +14,6 @@
 #include <wayland-server-core.h>
 #include <xkbcommon/xkbcommon.h>
 
-#ifdef REFURS_FX
-// scenefx is a drop-in wlr_scene with rounded corners; it must come before wlroots' own wlr_scene.h
-#include <scenefx/render/fx_renderer/fx_renderer.h>
-#include <scenefx/types/wlr_scene.h>
-#endif
-
 #include <wlr/backend.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
@@ -40,6 +34,7 @@
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
@@ -54,6 +49,7 @@
 #include <wlr/types/wlr_session_lock_v1.h>
 #include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_tearing_control_v1.h>
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_virtual_pointer_v1.h>

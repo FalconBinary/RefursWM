@@ -10,7 +10,6 @@ pub const c = @import("c");
 pub const cfg = @import("config.zig");
 pub const T = @import("types.zig");
 pub const L = @import("layout.zig");
-pub const fx = @import("build_options").fx;
 pub const testing = @import("build_options").testing;
 pub const View = @import("view.zig").View;
 const outmod = @import("output.zig");
@@ -88,6 +87,7 @@ pub const Server = struct {
     xcursor: *c.struct_wlr_xcursor_manager = undefined,
     relptr: *c.struct_wlr_relative_pointer_manager_v1 = undefined,
     idle: *c.struct_wlr_idle_notifier_v1 = undefined,
+    tearing: *c.struct_wlr_tearing_control_manager_v1 = undefined,
     security: *c.struct_wlr_security_context_manager_v1 = undefined,
     layers: Layers = .{},
 
