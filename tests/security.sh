@@ -64,6 +64,36 @@ elif grep -q "set_selection sent" "$OUT/clip.txt"; then ok "clipboard: backgroun
 else bad clipboard "test did not run ($(cat "$OUT/clip.txt"))"; fi
 stop clip
 
+# the legitimate case still works: the focused window copies, the next one pastes it
+startkb copy
+"$EVIL" copy >"$OUT/copy.txt" 2>&1 &
+sleep 1.5
+"$EVIL" paste >"$OUT/paste-ok.txt" 2>&1
+if grep -q EVIL "$OUT/paste-ok.txt"; then ok "clipboard: the focused window can copy"
+else bad clipboard "focused copy lost ($(cat "$OUT/copy.txt" "$OUT/paste-ok.txt" | tr '\n' ' '))"; fi
+stop copy
+
+# a token minted while focused may bring that window back later (launchers, notifications)
+startkb remint
+"$EVIL" remint >"$OUT/remint.txt" 2>&1 &
+EV=$!
+sleep 1; foot >/dev/null 2>&1 &
+wait $EV
+if grep -q "focus: regained" "$OUT/remint.txt"; then ok "activation: a token minted with focus works"
+else bad activation "legitimate token refused ($(cat "$OUT/remint.txt"))"; fi
+stop remint
+
+# a sandboxed app does not get the keyboard just by opening a window; a normal one does
+startkb mapfocus
+foot >/dev/null 2>&1 &
+sleep 1.5
+WAYLAND_DISPLAY=wayland-0-sandbox "$EVIL" mapfocus >"$OUT/mapfocus-sandbox.txt" 2>&1
+"$EVIL" mapfocus >"$OUT/mapfocus-main.txt" 2>&1
+if grep -q "yes" "$OUT/mapfocus-sandbox.txt"; then bad "sandbox focus" "sandboxed window took the focus"
+elif grep -q "yes" "$OUT/mapfocus-main.txt"; then ok "sandbox focus: no focus stealing on map (normal windows still get it)"
+else bad "sandbox focus" "$(cat "$OUT/mapfocus-sandbox.txt" "$OUT/mapfocus-main.txt" | tr '\n' ' ')"; fi
+stop mapfocus
+
 # focus stealing with an activation token that has a seat serial but no surface
 startkb activate
 "$EVIL" activate >"$OUT/activate.txt" 2>&1 &

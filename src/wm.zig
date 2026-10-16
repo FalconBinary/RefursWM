@@ -14,6 +14,8 @@ pub const testing = @import("build_options").testing;
 pub const View = @import("view.zig").View;
 const launcher = @import("launcher.zig");
 const policy = @import("policy.zig");
+const client = @import("client.zig");
+const view = @import("view.zig");
 const outmod = @import("output.zig");
 pub const Output = outmod.Output;
 pub const LayerSurf = outmod.LayerSurf;
@@ -113,7 +115,10 @@ pub const Server = struct {
     locked: bool = false,
     lock: ?*c.struct_wlr_session_lock_v1 = null,
 
-    inhibitors: u32 = 0,
+    inhibitors: std.ArrayList(*Inhibitor) = .empty,
+    idle_inhibited: bool = false,
+    /// a lock was requested; `locked` is sent once every output has shown the cover
+    lock_pending: bool = false,
     /// globals not offered to every client, see policy.Class
     restricted: std.ArrayList(Restricted) = .empty,
 };
@@ -121,6 +126,65 @@ pub const Server = struct {
 pub const Restricted = struct { global: *c.struct_wl_global, class: policy.Class };
 
 pub var s: Server = .{};
+
+// ------------------------------------------------------------------ idle inhibit
+
+/// An idle inhibitor counts only while its surface is visible: a video on a hidden workspace or
+/// behind the lock screen must not keep the session from locking itself.
+pub const Inhibitor = struct {
+    ih: *c.struct_wlr_idle_inhibitor_v1,
+    owner: *client.State,
+    l_destroy: Listener = std.mem.zeroes(Listener),
+
+    fn onDestroy(x: *Inhibitor, _: ?*anyopaque) void {
+        off(&x.l_destroy);
+        if (std.mem.indexOfScalar(*Inhibitor, s.inhibitors.items, x)) |i| _ = s.inhibitors.swapRemove(i);
+        client.give(x.owner, .inhibitors);
+        gpa.destroy(x);
+        updateIdle();
+    }
+};
+
+pub fn onNewInhibitor(data: ?*anyopaque) void {
+    const ih = ptr(c.struct_wlr_idle_inhibitor_v1, data);
+    const owner = client.take(client.of(ih.resource), .inhibitors) orelse return;
+    const x = gpa.create(Inhibitor) catch return client.give(owner, .inhibitors);
+    x.* = .{ .ih = ih, .owner = owner };
+    s.inhibitors.append(gpa, x) catch {
+        gpa.destroy(x);
+        return client.give(owner, .inhibitors);
+    };
+    on(&ih.events.destroy, &x.l_destroy, cb(Inhibitor, "l_destroy", Inhibitor.onDestroy));
+    updateIdle();
+}
+
+/// Called whenever visibility may have changed (arrange, workspaces, lock); a few inhibitors at most.
+pub fn updateIdle() void {
+    var on_ = false;
+    for (s.inhibitors.items) |x| if (visible(x.ih.surface)) {
+        on_ = true;
+        break;
+    };
+    if (on_ == s.idle_inhibited) return;
+    s.idle_inhibited = on_;
+    c.wlr_idle_notifier_v1_set_inhibited(s.idle, on_);
+}
+
+fn visible(surface: *c.struct_wlr_surface) bool {
+    var sf = c.wlr_surface_get_root_surface(surface);
+    if (s.locked) return c.wlr_session_lock_surface_v1_try_from_wlr_surface(sf) != null;
+    // popups: up to the window or layer surface they belong to
+    for (0..16) |_| {
+        if (c.wlr_xdg_toplevel_try_from_wlr_surface(sf)) |top| {
+            const v = view.viewOfToplevel(top) orelse return false;
+            return v.mapped and v.enabled and s.ws[v.ws].output != null;
+        }
+        if (c.wlr_layer_surface_v1_try_from_wlr_surface(sf) != null) return sf.*.mapped;
+        const p = c.wlr_xdg_popup_try_from_wlr_surface(sf) orelse return false;
+        sf = c.wlr_surface_get_root_surface(p.*.parent orelse return false);
+    }
+    return false;
+}
 
 pub fn log(comptime fmt: []const u8, args: anytype) void {
     std.debug.print("refurswm: " ++ fmt ++ "\n", args);
@@ -259,6 +323,7 @@ pub fn arrange(n: u8, scroll_to: ?*View) void {
         v.configure();
         v.place();
     }
+    updateIdle();
 }
 
 pub fn arrangeAll() void {
@@ -267,6 +332,7 @@ pub fn arrangeAll() void {
 
 pub fn hideWorkspace(n: u8) void {
     for (s.views.items) |v| if (v.ws == n) v.setEnabled(false);
+    updateIdle();
 }
 
 /// Puts a tiled view into its workspace layout, next to the workspace's last focused tiled view.

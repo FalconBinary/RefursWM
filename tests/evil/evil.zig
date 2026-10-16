@@ -9,8 +9,11 @@
 //!   flood N           N toplevels
 //!   popups N          one toplevel with N popups
 //!   clip              take the clipboard while another window has the keyboard
+//!   copy              take the clipboard while focused (the legitimate case)
 //!   paste             map a window and print the clipboard text it is offered
 //!   activate          steal the focus with an activation token that names no surface
+//!   remint            mint a token while focused, lose the focus, activate with it (legitimate)
+//!   mapfocus          map a window and print whether it got the keyboard focus
 //!   selfactivate N    activate the focused window N times, print how many configures that cost
 //!   inhibit SECS      an idle inhibitor on a window, kept for SECS seconds
 //!   vkey              virtual keyboard sending out-of-range keycodes
@@ -428,6 +431,26 @@ fn notFocused() bool {
     return leaves > 0 and !focused;
 }
 
+fn offerClipboard(dev: ?*c.struct_wl_data_device) void {
+    const src = c.wl_data_device_manager_create_data_source(ddm);
+    _ = c.wl_data_source_add_listener(src, &source_listener, null);
+    c.wl_data_source_offer(src, "text/plain;charset=utf-8");
+    c.wl_data_source_offer(src, "text/plain");
+    c.wl_data_device_set_selection(dev, src, last_serial);
+}
+
+fn modeCopy() u8 {
+    if (ddm == null) return fail("no data device manager");
+    const dev = c.wl_data_device_manager_get_data_device(ddm, seat);
+    _ = c.wl_data_device_add_listener(dev, &device_listener, null);
+    _ = mapWindow(false);
+    if (!waitFor(3000, isFocused)) return fail("never got the focus");
+    offerClipboard(dev);
+    out("set_selection sent while focused (serial {d})\n", .{last_serial});
+    _ = pump(6000);
+    return 0;
+}
+
 fn modeClip() u8 {
     if (ddm == null) return fail("no data device manager");
     const dev = c.wl_data_device_manager_get_data_device(ddm, seat);
@@ -435,11 +458,7 @@ fn modeClip() u8 {
     _ = mapWindow(false);
     // wait until something else takes the keyboard, then grab the clipboard from the background
     if (!waitFor(10_000, notFocused)) return fail("never lost the focus");
-    const src = c.wl_data_device_manager_create_data_source(ddm);
-    _ = c.wl_data_source_add_listener(src, &source_listener, null);
-    c.wl_data_source_offer(src, "text/plain;charset=utf-8");
-    c.wl_data_source_offer(src, "text/plain");
-    c.wl_data_device_set_selection(dev, src, last_serial);
+    offerClipboard(dev);
     out("set_selection sent while unfocused (serial {d})\n", .{last_serial});
     _ = pump(6000);
     report();
@@ -567,6 +586,27 @@ fn isFocused() bool {
     return focused;
 }
 
+/// What a notification daemon or a launcher does: the token is minted while focused, used later.
+fn modeRemint() u8 {
+    if (activation == null) return fail("no xdg-activation");
+    const win = mapWindow(false);
+    if (!waitFor(3000, isFocused)) return fail("never got the focus");
+    if (!mint(last_serial, win.surface)) return fail("no token");
+    if (!waitFor(10_000, notFocused)) return fail("never lost the focus");
+    const before = enters;
+    c.xdg_activation_v1_activate(activation, @ptrCast(&token_name), win.surface);
+    _ = pump(1000);
+    out("{s}\n", .{if (enters > before) "focus: regained" else "focus: refused"});
+    return 0;
+}
+
+fn modeMapFocus() u8 {
+    _ = mapWindow(false);
+    _ = pump(500);
+    out("focused on map: {s}\n", .{if (enters > 0) "yes" else "no"});
+    return 0;
+}
+
 fn modeSelfActivate(n: u32) u8 {
     if (activation == null) return fail("no xdg-activation");
     const win = mapWindow(false);
@@ -666,7 +706,7 @@ fn fail(msg: []const u8) u8 {
 }
 
 fn usage() u8 {
-    out("usage: evil registry|geom|layer|flood N|popups N|clip|paste|activate|selfactivate N|inhibit SECS|vkey|keyboard SECS|motion N\n", .{});
+    out("usage: evil registry|geom|layer|flood N|popups N|clip|copy|paste|activate|remint|mapfocus|selfactivate N|inhibit SECS|vkey|keyboard SECS|motion N\n", .{});
     return 2;
 }
 
@@ -691,6 +731,9 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (eq(u8, mode, "popups")) return modePopups(num);
     if (eq(u8, mode, "clip")) return modeClip();
     if (eq(u8, mode, "paste")) return modePaste();
+    if (eq(u8, mode, "copy")) return modeCopy();
+    if (eq(u8, mode, "remint")) return modeRemint();
+    if (eq(u8, mode, "mapfocus")) return modeMapFocus();
     if (eq(u8, mode, "activate")) return modeActivate();
     if (eq(u8, mode, "selfactivate")) return modeSelfActivate(num);
     if (eq(u8, mode, "inhibit")) return modeInhibit(num);

@@ -35,6 +35,14 @@ pub fn grantOf(grants: []const T.Grant, path: []const u8) ?T.Caps {
     return null;
 }
 
+/// Who may set the clipboard (and the primary selection): the client with the keyboard focus
+/// (Ctrl+C, a menu entry), or a granted clipboard manager through data-control. A background app
+/// may not, whatever serial it presents: it could swap a copied address or command for its own.
+pub fn maySetSelection(requester: ?*const anyopaque, focused: ?*const anyopaque, via_data_control: bool) bool {
+    const r = requester orelse return false;
+    return via_data_control or r == focused;
+}
+
 /// The display name the launcher puts into WAYLAND_DISPLAY: what wl_display_add_socket_auto makes.
 pub fn validDisplayName(n: []const u8) bool {
     if (!std.mem.startsWith(u8, n, "wayland-") or n.len == 8 or n.len > 12) return false;
@@ -84,4 +92,14 @@ test "grants match exact absolute paths only" {
     try tt.expect(grantOf(&g, "/usr/bin/grim2") == null);
     try tt.expect(grantOf(&g, "/home/u/.local/bin/grim") == null);
     try tt.expect(grantOf(&g, "") == null);
+}
+
+test "only the focused client or data-control may set the clipboard" {
+    var a: u8 = 0;
+    var b: u8 = 0;
+    try tt.expect(maySetSelection(&a, &a, false));
+    try tt.expect(!maySetSelection(&a, &b, false));
+    try tt.expect(!maySetSelection(&a, null, false));
+    try tt.expect(maySetSelection(&a, &b, true));
+    try tt.expect(!maySetSelection(null, &a, true));
 }

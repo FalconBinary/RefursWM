@@ -13,6 +13,7 @@ const L = wm.L;
 const Box = wm.Box;
 const Listener = wm.Listener;
 const client = @import("client.zig");
+const launcher = @import("launcher.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -229,7 +230,17 @@ pub const View = struct {
         if (v.xdg.requested.fullscreen) wm.setFullscreen(v, true);
         wm.arrange(v.ws, null);
         v.place();
-        if (s.ws[v.ws].output != null) wm.focusView(v, true);
+        if (s.ws[v.ws].output != null and v.mayFocusOnMap()) wm.focusView(v, true);
+    }
+
+    /// A sandboxed app may not take the keyboard just by opening a window: it could pose as another
+    /// app and read what the user types. It gets the focus through activation with a token (apps
+    /// RefursWM starts get one), from the user, or for a dialog while its own window has the focus.
+    fn mayFocusOnMap(v: *View) bool {
+        const cl = client.of(v.xdg.resource);
+        if (!client.sandboxed(cl)) return true;
+        const f = s.focused orelse return false;
+        return client.of(f.xdg.resource) == cl;
     }
 
     fn onUnmap(v: *View, _: ?*anyopaque) void {
@@ -314,7 +325,7 @@ fn newView(xdg: *c.struct_wlr_xdg_toplevel, owner: *client.State) !void {
     wm.on(&xdg.events.request_maximize, &v.l_maximize, wm.cb(View, "l_maximize", View.onMaximize));
 }
 
-fn viewOfToplevel(xdg: *c.struct_wlr_xdg_toplevel) ?*View {
+pub fn viewOfToplevel(xdg: *c.struct_wlr_xdg_toplevel) ?*View {
     const tree: *c.struct_wlr_scene_tree = @ptrCast(@alignCast(xdg.base.*.data orelse return null));
     const tag: *wm.Tag = @ptrCast(@alignCast(tree.node.data orelse return null));
     return @alignCast(@fieldParentPtr("tag", tag));
@@ -330,11 +341,19 @@ pub fn onNewDecoration(data: ?*anyopaque) void {
     if (v.xdg.base.*.initialized) v.onDecoMode(null);
 }
 
-/// xdg-activation: honoured only for tokens minted from real user input (they carry a seat),
-/// so a background app cannot steal focus.
+/// wlroots has checked the token's serial and, if the token names a surface, that this surface had
+/// the focus. A token naming no surface proves nothing about focus: it loses its seat, so it can
+/// not take the focus (onActivate). Dropping the seat is safe: wlroots' seat_destroy listener stays.
+pub fn onNewToken(data: ?*anyopaque) void {
+    const t = wm.ptr(c.struct_wlr_xdg_activation_token_v1, data);
+    if (t.surface == null) t.seat = null;
+}
+
+/// xdg-activation: honoured for tokens minted from real user input in a focused surface (they keep
+/// a seat) and for tokens RefursWM gave to programs it started; a background app cannot steal focus.
 pub fn onActivate(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_xdg_activation_v1_request_activate_event, data);
-    if (ev.token.*.seat == null) return;
+    if (ev.token.*.seat == null and !launcher.ownToken(ev.token)) return;
     const xdg = c.wlr_xdg_toplevel_try_from_wlr_surface(ev.surface) orelse return;
     const v = viewOfToplevel(xdg) orelse return;
     if (!v.mapped) return;

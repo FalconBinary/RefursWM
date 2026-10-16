@@ -41,6 +41,7 @@ var l_req_drag = zero;
 var l_start_drag = zero;
 var l_new_lock = zero;
 var l_new_inhibitor = zero;
+var l_new_token = zero;
 
 fn tree(parent: *c.struct_wlr_scene_tree) *c.struct_wlr_scene_tree {
     return c.wlr_scene_tree_create(parent) orelse @panic("out of memory");
@@ -64,28 +65,6 @@ const granted: wm.T.Caps = blk: {
     for (cfg.grants) |g| u |= @as(u8, @bitCast(g.caps));
     break :blk @bitCast(u);
 };
-
-const Inhibitor = struct {
-    owner: *client.State,
-    l_destroy: wm.Listener = zero,
-    fn onDestroy(x: *Inhibitor, _: ?*anyopaque) void {
-        wm.off(&x.l_destroy);
-        client.give(x.owner, .inhibitors);
-        wm.gpa.destroy(x);
-        s.inhibitors -|= 1;
-        c.wlr_idle_notifier_v1_set_inhibited(s.idle, s.inhibitors > 0);
-    }
-};
-
-fn onNewInhibitor(data: ?*anyopaque) void {
-    const ih = wm.ptr(c.struct_wlr_idle_inhibitor_v1, data);
-    const owner = client.take(client.of(ih.resource), .inhibitors) orelse return;
-    const x = wm.gpa.create(Inhibitor) catch return client.give(owner, .inhibitors);
-    x.* = .{ .owner = owner };
-    wm.on(&ih.events.destroy, &x.l_destroy, wm.cb(Inhibitor, "l_destroy", Inhibitor.onDestroy));
-    s.inhibitors += 1;
-    c.wlr_idle_notifier_v1_set_inhibited(s.idle, true);
-}
 
 fn setup() !void {
     const dsp = c.wl_display_create() orelse return error.Display;
@@ -149,6 +128,9 @@ fn setup() !void {
     wm.on(&deco.*.events.new_toplevel_decoration, &l_new_deco, wm.gcb(view.onNewDecoration));
     s.activation = c.wlr_xdg_activation_v1_create(dsp) orelse return error.Activation;
     wm.on(&s.activation.events.request_activate, &l_activate, wm.gcb(view.onActivate));
+    wm.on(&s.activation.events.new_token, &l_new_token, wm.gcb(view.onNewToken));
+    // tells input.onSetSelection which client sent the request
+    _ = c.wl_display_add_protocol_logger(dsp, input.protocolLogger, null);
 
     s.cursor = c.wlr_cursor_create() orelse return error.Cursor;
     c.wlr_cursor_attach_output_layout(s.cursor, s.output_layout);
@@ -173,7 +155,7 @@ fn setup() !void {
 
     s.idle = c.wlr_idle_notifier_v1_create(dsp) orelse return error.Idle;
     const inhibit = c.wlr_idle_inhibit_v1_create(dsp) orelse return error.Idle;
-    wm.on(&inhibit.*.events.new_inhibitor, &l_new_inhibitor, wm.gcb(onNewInhibitor));
+    wm.on(&inhibit.*.events.new_inhibitor, &l_new_inhibitor, wm.gcb(wm.onNewInhibitor));
     const lock = c.wlr_session_lock_manager_v1_create(dsp) orelse return error.Lock;
     wm.on(&lock.*.events.new_lock, &l_new_lock, wm.gcb(output.onNewLock));
 
@@ -310,7 +292,7 @@ pub fn main() u8 {
         &l_new_deco,   &l_activate,      &l_new_input,     &l_vkbd,      &l_vptr,
         &l_motion,     &l_motion_abs,    &l_button,        &l_axis,      &l_frame,
         &l_req_cursor, &l_cursor_shape,  &l_sel,           &l_primary,   &l_req_drag,
-        &l_start_drag, &l_new_lock,      &l_new_inhibitor,
+        &l_start_drag, &l_new_lock,      &l_new_inhibitor, &l_new_token,
     }) |l| wm.off(l);
     output.shutdown();
     input.shutdown();

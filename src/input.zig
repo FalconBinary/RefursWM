@@ -11,6 +11,7 @@ const cfg = wm.cfg;
 const View = wm.View;
 const Listener = wm.Listener;
 const outmod = @import("output.zig");
+const policy = @import("policy.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -380,13 +381,42 @@ pub fn onCursorShape(data: ?*anyopaque) void {
         c.wlr_cursor_set_xcursor(s.cursor, s.xcursor, c.wlr_cursor_shape_v1_name(ev.shape));
 }
 
+// clipboard: the request event of wlr_seat does not say which client asked, so the protocol
+// logger notes it while the request is dispatched (policy.maySetSelection decides)
+
+var sel_client: ?*c.struct_wl_client = null;
+var sel_control = false;
+
+/// Sees every message (wl_display_add_protocol_logger): two string compares per request, nothing
+/// for events, no formatting.
+pub fn protocolLogger(_: ?*anyopaque, dir: c.enum_wl_protocol_logger_type, m: [*c]const c.struct_wl_protocol_logger_message) callconv(.c) void {
+    if (dir != c.WL_PROTOCOL_LOGGER_REQUEST) return;
+    const name = std.mem.span(m.*.message.*.name);
+    if (!std.mem.eql(u8, name, "set_selection") and !std.mem.eql(u8, name, "set_primary_selection")) return;
+    sel_client = c.wl_resource_get_client(m.*.resource);
+    sel_control = std.mem.endsWith(u8, std.mem.span(c.wl_resource_get_class(m.*.resource)), "data_control_device_v1");
+}
+
+fn selectionAllowed() bool {
+    const requester = sel_client;
+    const control = sel_control;
+    sel_client = null;
+    sel_control = false;
+    const fc = s.seat.keyboard_state.focused_client;
+    const focused: ?*c.struct_wl_client = if (fc != null) fc.*.client else null;
+    return policy.maySetSelection(requester, focused, control);
+}
+
 pub fn onSetSelection(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_seat_request_set_selection_event, data);
+    // refused: the source is cancelled, so the app knows it does not own the clipboard
+    if (!selectionAllowed()) return if (ev.source) |src| c.wlr_data_source_destroy(src);
     c.wlr_seat_set_selection(s.seat, ev.source, ev.serial);
 }
 
 pub fn onSetPrimary(data: ?*anyopaque) void {
     const ev = wm.ptr(c.struct_wlr_seat_request_set_primary_selection_event, data);
+    if (!selectionAllowed()) return if (ev.source) |src| c.wlr_primary_selection_source_destroy(src);
     c.wlr_seat_set_primary_selection(s.seat, ev.source, ev.serial);
 }
 

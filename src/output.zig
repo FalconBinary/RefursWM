@@ -21,9 +21,14 @@ pub const Output = struct {
     ws: u8,
     full: Box = .{},
     usable: Box = .{},
+    lock_surf: ?*LockSurf = null,
+    /// waiting for a presented frame that shows the lock cover (see onNewLock)
+    lock_wait: bool = false,
+    lock_seq: u32 = 0,
     l_frame: Listener = zero,
     l_request_state: Listener = zero,
     l_destroy: Listener = zero,
+    l_present: Listener = zero,
 
     fn onFrame(o: *Output, _: ?*anyopaque) void {
         if (c.wlr_scene_output_needs_frame(o.so)) o.commit();
@@ -62,6 +67,8 @@ pub const Output = struct {
         wm.off(&o.l_frame);
         wm.off(&o.l_request_state);
         wm.off(&o.l_destroy);
+        if (o.lock_surf) |l| l.output = null;
+        if (o.lock_wait) o.stopLockWait();
         // layer surfaces die with their monitor (their destroy handlers unlink them)
         var i: usize = s.layer_surfaces.items.len;
         while (i > 0) {
@@ -77,6 +84,31 @@ pub const Output = struct {
         c.wlr_scene_node_destroy(&o.lock_bg.node);
         wm.gpa.destroy(o);
         if (s.focused) |v| if (s.ws[v.ws].output == null) wm.focusView(null, false);
+        lockShown();
+    }
+
+    /// The next commit of this output shows the lock cover; `locked` waits until it is presented.
+    fn startLockWait(o: *Output) void {
+        if (!o.wlr.enabled or o.lock_wait) return;
+        o.lock_wait = true;
+        o.lock_seq = o.wlr.commit_seq +% 1;
+        wm.on(&o.wlr.events.present, &o.l_present, wm.cb(Output, "l_present", Output.onPresent));
+        c.wlr_output_schedule_frame(o.wlr);
+    }
+
+    fn stopLockWait(o: *Output) void {
+        o.lock_wait = false;
+        wm.off(&o.l_present);
+    }
+
+    fn onPresent(o: *Output, data: ?*anyopaque) void {
+        const ev = wm.ptr(c.struct_wlr_output_event_present, data);
+        // a frame committed before the lock is no proof
+        if (ev.commit_seq -% o.lock_seq >= 1 << 31) return;
+        // dropped (VT switch, failed flip): damage the cover again for one more frame
+        if (!ev.presented) return redamageLock();
+        o.stopLockWait();
+        lockShown();
     }
 };
 
@@ -148,6 +180,7 @@ pub fn onNewOutput(data: ?*anyopaque) void {
     wm.on(&wo.events.request_state, &o.l_request_state, wm.cb(Output, "l_request_state", Output.onRequestState));
     wm.on(&wo.events.destroy, &o.l_destroy, wm.cb(Output, "l_destroy", Output.onDestroy));
     updateGeometry(o);
+    if (s.lock_pending) o.startLockWait();
     wm.log("output {s}: {d}x{d} workspace {d}", .{ name, o.full.w, o.full.h, ws + 1 });
 }
 
@@ -159,6 +192,7 @@ pub fn updateGeometry(o: *Output) void {
         c.wlr_scene_node_set_position(&r.node, b.x, b.y);
         c.wlr_scene_rect_set_size(r, b.width, b.height);
     }
+    if (o.lock_surf) |l| l.place();
     arrangeLayers(o);
 }
 
@@ -204,12 +238,14 @@ pub const LayerSurf = struct {
         l.mapped = true;
         arrangeLayers(l.output);
         if (l.interactive() and l.layer >= c.ZWLR_LAYER_SHELL_V1_LAYER_TOP and !s.locked) focusLayer(l);
+        wm.updateIdle();
     }
 
     fn onUnmap(l: *LayerSurf, _: ?*anyopaque) void {
         l.mapped = false;
         if (s.layer_focus == l) unfocusLayer();
         arrangeLayers(l.output);
+        wm.updateIdle();
     }
 
     fn onDestroy(l: *LayerSurf, _: ?*anyopaque) void {
@@ -301,8 +337,17 @@ pub fn arrangeLayers(o: *Output) void {
 const LockSurf = struct {
     tag: wm.Tag = .lock,
     ls: *c.struct_wlr_session_lock_surface_v1,
+    tree: *c.struct_wlr_scene_tree,
+    output: ?*Output,
     l_map: Listener = zero,
     l_destroy: Listener = zero,
+
+    /// Covers its output; again whenever the output's geometry changes.
+    fn place(l: *LockSurf) void {
+        const o = l.output orelse return;
+        c.wlr_scene_node_set_position(&l.tree.node, o.full.x, o.full.y);
+        _ = c.wlr_session_lock_surface_v1_configure(l.ls, @intCast(@max(1, o.full.w)), @intCast(@max(1, o.full.h)));
+    }
 
     fn onMap(l: *LockSurf, _: ?*anyopaque) void {
         if (s.lock != null) wm.keyboardEnter(l.ls.surface);
@@ -311,6 +356,9 @@ const LockSurf = struct {
     fn onDestroy(l: *LockSurf, _: ?*anyopaque) void {
         wm.off(&l.l_map);
         wm.off(&l.l_destroy);
+        if (l.output) |o| if (o.lock_surf == l) {
+            o.lock_surf = null;
+        };
         wm.gpa.destroy(l);
     }
 };
@@ -323,8 +371,9 @@ fn setLockBg(on: bool) void {
     c.wlr_scene_node_set_enabled(&s.layers.lock_bg.*.node, on);
 }
 
-/// Locking blanks every monitor with an opaque rect above all windows before the locker
-/// is told the session is locked; input then reaches only lock surfaces.
+/// Locking covers every monitor with an opaque rect above all windows; input then reaches only lock
+/// surfaces. The locker is told "locked" only once every enabled monitor has presented a frame with
+/// that cover (ext-session-lock): suspend right after it can never resume onto the open desktop.
 pub fn onNewLock(data: ?*anyopaque) void {
     const lock = wm.ptr(c.struct_wlr_session_lock_v1, data);
     if (s.lock != null) return c.wlr_session_lock_v1_destroy(lock);
@@ -337,18 +386,37 @@ pub fn onNewLock(data: ?*anyopaque) void {
     wm.on(&lock.events.new_surface, &l_lock_surface, wm.gcb(onLockSurface));
     wm.on(&lock.events.unlock, &l_unlock, wm.gcb(onUnlock));
     wm.on(&lock.events.destroy, &l_lock_destroy, wm.gcb(onLockDestroy));
+    s.lock_pending = true;
+    for (s.outputs.items) |o| o.startLockWait();
+    lockShown();
+    wm.updateIdle();
+}
+
+/// Sends `locked` when no output is still waiting for its cover frame.
+fn lockShown() void {
+    if (!s.lock_pending) return;
+    for (s.outputs.items) |o| if (o.lock_wait) return;
+    s.lock_pending = false;
+    const lock = s.lock orelse return;
     c.wlr_session_lock_v1_send_locked(lock);
+    wm.log("session locked: every output shows the lock cover", .{});
+}
+
+/// Re-enabling the cover damages every output, so each one renders it once more.
+fn redamageLock() void {
+    c.wlr_scene_node_set_enabled(&s.layers.lock_bg.*.node, false);
+    c.wlr_scene_node_set_enabled(&s.layers.lock_bg.*.node, true);
 }
 
 fn onLockSurface(data: ?*anyopaque) void {
     const ls = wm.ptr(c.struct_wlr_session_lock_surface_v1, data);
     const o = outputOf(ls.output) orelse return;
     const tree = c.wlr_scene_subsurface_tree_create(s.layers.lock, ls.surface) orelse return;
-    const l = wm.gpa.create(LockSurf) catch return;
-    l.* = .{ .ls = ls };
+    const l = wm.gpa.create(LockSurf) catch return c.wlr_scene_node_destroy(&tree.*.node);
+    l.* = .{ .ls = ls, .tree = tree, .output = o };
     tree.*.node.data = &l.tag;
-    c.wlr_scene_node_set_position(&tree.*.node, o.full.x, o.full.y);
-    _ = c.wlr_session_lock_surface_v1_configure(ls, @intCast(o.full.w), @intCast(o.full.h));
+    o.lock_surf = l;
+    l.place();
     wm.on(&ls.surface.*.events.map, &l.l_map, wm.cb(LockSurf, "l_map", LockSurf.onMap));
     wm.on(&ls.events.destroy, &l.l_destroy, wm.cb(LockSurf, "l_destroy", LockSurf.onDestroy));
 }
@@ -358,13 +426,16 @@ fn dropLock() void {
     wm.off(&l_unlock);
     wm.off(&l_lock_destroy);
     s.lock = null;
+    s.lock_pending = false;
+    for (s.outputs.items) |o| if (o.lock_wait) o.stopLockWait();
 }
 
 fn onUnlock(_: ?*anyopaque) void {
     dropLock();
     s.locked = false;
     setLockBg(false);
-    if (s.focused) |v| wm.keyboardEnter(v.surface());
+    if (s.focused) |v| wm.keyboardEnter(v.surface()) else if (s.mon) |o| wm.focusTop(o.ws);
+    wm.updateIdle();
 }
 
 /// The locker died without unlocking: stay locked (screen stays blank); a new locker may take over.
