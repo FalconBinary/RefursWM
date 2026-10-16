@@ -19,6 +19,33 @@ pub const LayerSurf = outmod.LayerSurf;
 
 pub const gpa = std.heap.c_allocator;
 pub const Box = L.Box;
+
+// a wrong config value is a compile error, not a surprise after login
+comptime {
+    const bad = struct {
+        fn frac(x: f32) bool {
+            return !(x >= 0 and x <= 1);
+        }
+    };
+    if (bad.frac(cfg.active_opacity) or bad.frac(cfg.inactive_opacity)) @compileError("config: opacity must be within 0..1");
+    for (cfg.rules) |r| {
+        if (r.opacity) |o| if (bad.frac(o)) @compileError("config: rule opacity must be within 0..1");
+        if (r.workspace) |n| if (n < 1 or n > WS) @compileError("config: rule workspace must be 1..9");
+    }
+    if (cfg.border < 0 or cfg.border > 64) @compileError("config: border must be 0..64");
+    if (cfg.gaps_in < 0 or cfg.gaps_out < 0 or cfg.gaps_in > 512 or cfg.gaps_out > 512) @compileError("config: gaps must be 0..512");
+    if (cfg.scroll_width <= 0 or cfg.scroll_width > 1) @compileError("config: scroll_width must be within (0, 1]");
+    if (cfg.scroll_widths.len == 0) @compileError("config: scroll_widths must not be empty");
+    for (cfg.scroll_widths) |w| if (w <= 0 or w > 1) @compileError("config: scroll_widths must be within (0, 1]");
+    for (cfg.outputs) |o| if (!(o.scale > 0 and o.scale <= 8)) @compileError("config: output scale must be within (0, 8]");
+    if (cfg.repeat_rate < 0 or cfg.repeat_delay < 0) @compileError("config: key repeat must not be negative");
+    if (cfg.cursor_size < 8 or cfg.cursor_size > 256) @compileError("config: cursor_size must be 8..256");
+    for (cfg.binds) |b| switch (b.action) {
+        .workspace, .move_to_workspace => |n| if (n < 1 or n > WS) @compileError("config: workspace binds take 1..9"),
+        .spawn => |cmd| if (cmd.len == 0 or cmd.len > 32) @compileError("config: a command needs 1..32 arguments"),
+        else => {},
+    };
+}
 pub const Listener = c.struct_wl_listener;
 pub const WS = 9;
 
@@ -463,10 +490,10 @@ fn moveDir(v: *View, d: L.Dir) void {
     if (v.floating) {
         const step = 40;
         switch (d) {
-            .left => v.box.x -= step,
-            .right => v.box.x += step,
-            .up => v.box.y -= step,
-            .down => v.box.y += step,
+            .left => v.box.x -|= step,
+            .right => v.box.x +|= step,
+            .up => v.box.y -|= step,
+            .down => v.box.y +|= step,
         }
         return v.place();
     }
@@ -508,8 +535,8 @@ pub fn swapTiled(a: *View, b: *View) void {
 pub fn resizeView(v: *View, dx: i32, dy: i32, grow: bool) void {
     if (v.fullscreen) return;
     if (v.floating) {
-        v.box.w = @max(60, v.box.w + dx);
-        v.box.h = @max(40, v.box.h + dy);
+        v.box.w = std.math.clamp(v.box.w +| dx, 60, L.LIMIT);
+        v.box.h = std.math.clamp(v.box.h +| dy, 40, L.LIMIT);
         v.configure();
         return v.place();
     }

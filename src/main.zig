@@ -11,6 +11,7 @@ const cfg = wm.cfg;
 const view = @import("view.zig");
 const output = @import("output.zig");
 const input = @import("input.zig");
+const client = @import("client.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(wm.Listener);
 
@@ -44,9 +45,9 @@ fn tree(parent: *c.struct_wlr_scene_tree) *c.struct_wlr_scene_tree {
 
 /// Hides privileged globals from sandboxed clients (flatpak etc. tag their connection
 /// with security-context-v1). Unsandboxed clients see what the config enables.
-fn globalFilter(client: ?*const c.struct_wl_client, global: ?*const c.struct_wl_global, _: ?*anyopaque) callconv(.c) bool {
+fn globalFilter(cl: ?*const c.struct_wl_client, global: ?*const c.struct_wl_global, _: ?*anyopaque) callconv(.c) bool {
     for (s.privileged.items) |g| if (g == global) {
-        return c.wlr_security_context_manager_v1_lookup_client(s.security, client) == null;
+        return c.wlr_security_context_manager_v1_lookup_client(s.security, cl) == null;
     };
     return true;
 }
@@ -56,9 +57,11 @@ fn privileged(g: ?*c.struct_wl_global) void {
 }
 
 const Inhibitor = struct {
+    owner: *client.State,
     l_destroy: wm.Listener = zero,
     fn onDestroy(x: *Inhibitor, _: ?*anyopaque) void {
         wm.off(&x.l_destroy);
+        client.give(x.owner, .inhibitors);
         wm.gpa.destroy(x);
         s.inhibitors -|= 1;
         c.wlr_idle_notifier_v1_set_inhibited(s.idle, s.inhibitors > 0);
@@ -67,8 +70,9 @@ const Inhibitor = struct {
 
 fn onNewInhibitor(data: ?*anyopaque) void {
     const ih = wm.ptr(c.struct_wlr_idle_inhibitor_v1, data);
-    const x = wm.gpa.create(Inhibitor) catch return;
-    x.* = .{};
+    const owner = client.take(client.of(ih.resource), .inhibitors) orelse return;
+    const x = wm.gpa.create(Inhibitor) catch return client.give(owner, .inhibitors);
+    x.* = .{ .owner = owner };
     wm.on(&ih.events.destroy, &x.l_destroy, wm.cb(Inhibitor, "l_destroy", Inhibitor.onDestroy));
     s.inhibitors += 1;
     c.wlr_idle_notifier_v1_set_inhibited(s.idle, true);

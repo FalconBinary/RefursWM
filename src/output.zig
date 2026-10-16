@@ -9,6 +9,7 @@ const c = wm.c;
 const cfg = wm.cfg;
 const Box = wm.Box;
 const Listener = wm.Listener;
+const client = @import("client.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -157,6 +158,7 @@ pub const LayerSurf = struct {
     ls: *c.struct_wlr_layer_surface_v1,
     scene: *c.struct_wlr_scene_layer_surface_v1,
     output: *Output,
+    owner: *client.State,
     layer: c_uint,
     mapped: bool = false,
     l_map: Listener = zero,
@@ -195,6 +197,7 @@ pub const LayerSurf = struct {
         for ([_]*Listener{ &l.l_map, &l.l_unmap, &l.l_commit, &l.l_destroy }) |x| wm.off(x);
         if (std.mem.indexOfScalar(*LayerSurf, s.layer_surfaces.items, l)) |i| _ = s.layer_surfaces.orderedRemove(i);
         const o = l.output;
+        client.give(l.owner, .layers);
         wm.gpa.destroy(l);
         arrangeLayers(o);
     }
@@ -227,10 +230,18 @@ pub fn onNewLayerSurface(data: ?*anyopaque) void {
         ls.output = m.wlr;
     }
     const o = outputOf(ls.output) orelse return c.wlr_layer_surface_v1_destroy(ls);
+    const owner = client.take(client.of(ls.resource), .layers) orelse return;
     const layer = ls.pending.layer;
-    const scene = c.wlr_scene_layer_surface_v1_create(layerTree(layer), ls) orelse return c.wlr_layer_surface_v1_destroy(ls);
-    const l = wm.gpa.create(LayerSurf) catch return c.wlr_layer_surface_v1_destroy(ls);
-    l.* = .{ .ls = ls, .scene = scene, .output = o, .layer = layer };
+    const l = wm.gpa.create(LayerSurf) catch {
+        client.give(owner, .layers);
+        return c.wlr_layer_surface_v1_destroy(ls);
+    };
+    const scene = c.wlr_scene_layer_surface_v1_create(layerTree(layer), ls) orelse {
+        wm.gpa.destroy(l);
+        client.give(owner, .layers);
+        return c.wlr_layer_surface_v1_destroy(ls);
+    };
+    l.* = .{ .ls = ls, .scene = scene, .output = o, .owner = owner, .layer = layer };
     scene.*.tree.*.node.data = &l.tag;
     ls.data = scene.*.tree;
     s.layer_surfaces.append(wm.gpa, l) catch {};
@@ -256,7 +267,9 @@ pub fn arrangeLayers(o: *Output) void {
         if ((l.ls.current.exclusive_zone > 0) != exclusive) continue;
         c.wlr_scene_layer_surface_v1_configure(l.scene, &full, &usable);
     };
-    const nu: Box = .{ .x = usable.x, .y = usable.y, .w = usable.width, .h = usable.height };
+    // wlroots derives the usable area from client-set margins and exclusive zones: keep it on the output
+    var nu = wm.L.intersect(.{ .x = usable.x, .y = usable.y, .w = usable.width, .h = usable.height }, o.full);
+    if (nu.empty()) nu = o.full;
     if (!std.meta.eql(nu, o.usable)) {
         o.usable = nu;
         wm.arrange(o.ws, null);

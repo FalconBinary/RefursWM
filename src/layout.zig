@@ -8,6 +8,11 @@
 //! Both only compute boxes; the caller applies them. Nothing here allocates per frame.
 const std = @import("std");
 
+/// Coordinates and sizes that come from a client are clamped into ±LIMIT (real outputs are at most
+/// 16k wide), so a few of them always add up without overflowing i32. Box math also saturates,
+/// so even values that bypassed `sanitize` cannot crash the compositor (ReleaseSafe panics on overflow).
+pub const LIMIT: i32 = 1 << 16;
+
 pub const Box = struct {
     x: i32 = 0,
     y: i32 = 0,
@@ -15,7 +20,7 @@ pub const Box = struct {
     h: i32 = 0,
 
     pub fn shrink(b: Box, by: i32) Box {
-        return .{ .x = b.x + by, .y = b.y + by, .w = @max(1, b.w - 2 * by), .h = @max(1, b.h - 2 * by) };
+        return .{ .x = b.x +| by, .y = b.y +| by, .w = @max(1, b.w -| (by *| 2)), .h = @max(1, b.h -| (by *| 2)) };
     }
 
     pub fn empty(b: Box) bool {
@@ -24,17 +29,32 @@ pub const Box = struct {
 
     pub fn contains(b: Box, x: f64, y: f64) bool {
         return x >= @as(f64, @floatFromInt(b.x)) and y >= @as(f64, @floatFromInt(b.y)) and
-            x < @as(f64, @floatFromInt(b.x + b.w)) and y < @as(f64, @floatFromInt(b.y + b.h));
+            x < @as(f64, @floatFromInt(b.x +| b.w)) and y < @as(f64, @floatFromInt(b.y +| b.h));
+    }
+
+    /// For anything a client controls: position within ±LIMIT, size within 1..LIMIT.
+    pub fn sanitize(b: Box) Box {
+        return .{
+            .x = std.math.clamp(b.x, -LIMIT, LIMIT),
+            .y = std.math.clamp(b.y, -LIMIT, LIMIT),
+            .w = std.math.clamp(b.w, 1, LIMIT),
+            .h = std.math.clamp(b.h, 1, LIMIT),
+        };
     }
 };
 
 pub fn intersect(a: Box, b: Box) Box {
     const x0 = @max(a.x, b.x);
     const y0 = @max(a.y, b.y);
-    const x1 = @min(a.x + a.w, b.x + b.w);
-    const y1 = @min(a.y + a.h, b.y + b.h);
+    const x1 = @min(a.x +| a.w, b.x +| b.w);
+    const y1 = @min(a.y +| a.h, b.y +| b.h);
     if (x1 <= x0 or y1 <= y0) return .{};
-    return .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
+    return .{ .x = x0, .y = y0, .w = x1 -| x0, .h = y1 -| y0 };
+}
+
+/// Float to pixels without the panic @intFromFloat has for NaN or out-of-range values.
+pub fn px(v: f64) i32 {
+    return std.math.lossyCast(i32, @round(v));
 }
 
 pub const Mode = enum { dwindle, scroll };
@@ -116,7 +136,8 @@ pub fn Dwindle(comptime W: type) type {
         }
 
         pub fn arrange(self: *Self, box: Box, gap: i32, ctx: anytype) void {
-            if (self.root) |r| place(r, box, gap, ctx);
+            const b: Box = .{ .x = box.x, .y = box.y, .w = @max(1, box.w), .h = @max(1, box.h) };
+            if (self.root) |r| place(r, b, gap, ctx);
         }
 
         fn place(n: *Node, box: Box, gap: i32, ctx: anytype) void {
@@ -127,15 +148,15 @@ pub fn Dwindle(comptime W: type) type {
                     var a = box;
                     var b = box;
                     if (sp.horizontal) {
-                        const aw: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(box.w - gap)) * sp.ratio));
+                        const aw = px(@as(f64, @floatFromInt(box.w -| gap)) * @as(f64, sp.ratio));
                         a.w = @max(1, aw);
-                        b.x = box.x + aw + gap;
-                        b.w = @max(1, box.w - aw - gap);
+                        b.x = box.x +| aw +| gap;
+                        b.w = @max(1, box.w -| aw -| gap);
                     } else {
-                        const ah: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(box.h - gap)) * sp.ratio));
+                        const ah = px(@as(f64, @floatFromInt(box.h -| gap)) * @as(f64, sp.ratio));
                         a.h = @max(1, ah);
-                        b.y = box.y + ah + gap;
-                        b.h = @max(1, box.h - ah - gap);
+                        b.y = box.y +| ah +| gap;
+                        b.h = @max(1, box.h -| ah -| gap);
                     }
                     place(sp.a, a, gap, ctx);
                     place(sp.b, b, gap, ctx);
@@ -255,37 +276,37 @@ pub fn Scroll(comptime W: type) type {
 
         fn colWidth(col: Column, box: Box, gap: i32) i32 {
             // width 1/n fits n columns exactly: n*cw + (n-1)*gap = box.w
-            const f = col.width * @as(f32, @floatFromInt(box.w + gap)) - @as(f32, @floatFromInt(gap));
-            return @max(1, @as(i32, @intFromFloat(@round(f))));
+            const f = @as(f64, col.width) * @as(f64, @floatFromInt(box.w +| gap)) - @as(f64, @floatFromInt(gap));
+            return @max(1, px(f));
         }
 
         /// `scroll_to`: keyboard focus moved to this window, bring its column into view.
         pub fn arrange(self: *Self, box: Box, gap: i32, scroll_to: ?W, center: bool, ctx: anytype) void {
             if (scroll_to) |w| if (self.find(w)) |p| {
                 var x: i32 = 0;
-                for (self.cols.items[0..p.col]) |col| x += colWidth(col, box, gap) + gap;
+                for (self.cols.items[0..p.col]) |col| x = x +| colWidth(col, box, gap) +| gap;
                 const cw = colWidth(self.cols.items[p.col], box, gap);
                 if (center) {
-                    self.offset = x + @divTrunc(cw - box.w, 2);
+                    self.offset = x +| @divTrunc(cw -| box.w, 2);
                 } else if (x < self.offset) {
                     self.offset = x;
-                } else if (x + cw > self.offset + box.w) {
-                    self.offset = x + cw - box.w;
+                } else if (x +| cw > self.offset +| box.w) {
+                    self.offset = x +| cw -| box.w;
                 }
             };
-            var x: i32 = box.x - self.offset;
+            var x: i32 = box.x -| self.offset;
             for (self.cols.items) |col| {
                 const cw = colWidth(col, box, gap);
                 const n: i32 = @intCast(col.wins.items.len);
-                const avail = box.h - (n - 1) * gap;
+                const avail = box.h -| ((n - 1) *| gap);
                 var y = box.y;
                 for (col.wins.items, 0..) |w, i| {
                     const last = i + 1 == col.wins.items.len;
-                    const h = if (last) box.y + box.h - y else @divTrunc(avail, n);
+                    const h = if (last) box.y +| box.h -| y else @divTrunc(avail, n);
                     ctx.emit(w, Box{ .x = x, .y = y, .w = cw, .h = @max(1, h) });
-                    y += h + gap;
+                    y = y +| h +| gap;
                 }
-                x += cw + gap;
+                x = x +| cw +| gap;
             }
         }
 
@@ -373,22 +394,22 @@ pub fn Scroll(comptime W: type) type {
 pub fn neighbor(cur: Box, dir: Dir, cands: []const Box) ?usize {
     var best: ?usize = null;
     var best_score: i64 = std.math.maxInt(i64);
-    const cx = cur.x + @divTrunc(cur.w, 2);
-    const cy = cur.y + @divTrunc(cur.h, 2);
+    const cx = cur.x +| @divTrunc(cur.w, 2);
+    const cy = cur.y +| @divTrunc(cur.h, 2);
     for (cands, 0..) |b, i| {
         const past = switch (dir) {
-            .left => b.x + b.w <= cur.x + 1,
-            .right => b.x >= cur.x + cur.w - 1,
-            .up => b.y + b.h <= cur.y + 1,
-            .down => b.y >= cur.y + cur.h - 1,
+            .left => b.x +| b.w <= cur.x +| 1,
+            .right => b.x >= cur.x +| cur.w -| 1,
+            .up => b.y +| b.h <= cur.y +| 1,
+            .down => b.y >= cur.y +| cur.h -| 1,
         };
         if (!past) continue;
         const horiz = dir == .left or dir == .right;
-        const overlap = if (horiz) @min(cur.y + cur.h, b.y + b.h) - @max(cur.y, b.y) else @min(cur.x + cur.w, b.x + b.w) - @max(cur.x, b.x);
-        const bx = b.x + @divTrunc(b.w, 2);
-        const by = b.y + @divTrunc(b.h, 2);
-        const along: i64 = if (horiz) @abs(bx - cx) else @abs(by - cy);
-        const across: i64 = if (horiz) @abs(by - cy) else @abs(bx - cx);
+        const overlap = if (horiz) @min(cur.y +| cur.h, b.y +| b.h) -| @max(cur.y, b.y) else @min(cur.x +| cur.w, b.x +| b.w) -| @max(cur.x, b.x);
+        const bx = b.x +| @divTrunc(b.w, 2);
+        const by = b.y +| @divTrunc(b.h, 2);
+        const along: i64 = if (horiz) @abs(bx -| cx) else @abs(by -| cy);
+        const across: i64 = if (horiz) @abs(by -| cy) else @abs(bx -| cx);
         const score = (if (overlap > 0) @as(i64, 0) else 1 << 40) + along * 4 + across;
         if (score < best_score) {
             best_score = score;
@@ -526,4 +547,103 @@ test "neighbor picks the overlapping box first" {
     try tt.expectEqual(@as(?usize, 0), neighbor(cur, .right, &cands));
     try tt.expectEqual(@as(?usize, 2), neighbor(cur, .down, &cands));
     try tt.expectEqual(@as(?usize, null), neighbor(cur, .left, &cands));
+}
+
+test "sanitize keeps client values in the safe range" {
+    const min = std.math.minInt(i32);
+    const max = std.math.maxInt(i32);
+    const b = (Box{ .x = min, .y = max, .w = max, .h = min }).sanitize();
+    try tt.expectEqual(Box{ .x = -LIMIT, .y = LIMIT, .w = LIMIT, .h = 1 }, b);
+    // the box math saturates instead of panicking even on raw extremes
+    _ = intersect(.{ .x = min, .y = min, .w = max, .h = max }, .{ .x = max, .y = max, .w = max, .h = max });
+    _ = (Box{ .x = max, .y = min, .w = min, .h = max }).shrink(max);
+    try tt.expect(!(Box{ .x = max, .y = max, .w = max, .h = max }).contains(0, 0));
+    try tt.expectEqual(@as(i32, max), px(std.math.inf(f64)));
+    try tt.expectEqual(@as(i32, 0), px(std.math.nan(f64)));
+}
+
+// Random operation sequences on both layouts, with random (also degenerate) areas and gaps:
+// nothing panics or leaks, every window stays in the layout exactly once, every box is non-empty.
+test "layouts survive random operation sequences" {
+    var prng = std.Random.DefaultPrng.init(0x5eed_2026);
+    const r = prng.random();
+    const Set = struct {
+        ids: [64]u32 = undefined,
+        n: usize = 0,
+        fn has(s: *const @This(), w: u32) bool {
+            return std.mem.indexOfScalar(u32, s.ids[0..s.n], w) != null;
+        }
+        fn pick(s: *const @This(), rr: std.Random) ?u32 {
+            return if (s.n == 0) null else s.ids[rr.uintLessThan(usize, s.n)];
+        }
+        fn del(s: *@This(), w: u32) void {
+            const i = std.mem.indexOfScalar(u32, s.ids[0..s.n], w).?;
+            s.ids[i] = s.ids[s.n - 1];
+            s.n -= 1;
+        }
+    };
+    const Check = struct {
+        seen: [64]u32 = undefined,
+        n: usize = 0,
+        fn emit(self: *@This(), w: u32, b: Box) void {
+            std.debug.assert(b.w >= 1 and b.h >= 1);
+            self.seen[self.n] = w;
+            self.n += 1;
+        }
+        fn same(self: *@This(), set: *const Set) !void {
+            try tt.expectEqual(set.n, self.n);
+            for (self.seen[0..self.n]) |w| try tt.expect(set.has(w));
+        }
+    };
+    const extremes = [_]i32{ std.math.minInt(i32), -LIMIT, -1, 0, 1, LIMIT, std.math.maxInt(i32) };
+    var next: u32 = 1;
+    for (0..200) |_| {
+        var d: Dwindle(u32) = .{};
+        defer d.clear(tt.allocator);
+        var sc: Scroll(u32) = .{};
+        defer sc.deinit(tt.allocator);
+        var set: Set = .{};
+        const area: Box = if (r.uintLessThan(u8, 8) == 0)
+            .{ .x = extremes[r.uintLessThan(usize, extremes.len)], .y = extremes[r.uintLessThan(usize, extremes.len)], .w = extremes[r.uintLessThan(usize, extremes.len)], .h = extremes[r.uintLessThan(usize, extremes.len)] }
+        else
+            .{ .x = r.intRangeAtMost(i32, -LIMIT, LIMIT), .y = r.intRangeAtMost(i32, -LIMIT, LIMIT), .w = r.intRangeAtMost(i32, 1, LIMIT), .h = r.intRangeAtMost(i32, 1, LIMIT) };
+        const gap = r.intRangeAtMost(i32, 0, 64);
+        for (0..500) |_| {
+            switch (r.uintLessThan(u8, 10)) {
+                0, 1, 2 => if (set.n < 64) {
+                    const w = next;
+                    next += 1;
+                    try d.insert(tt.allocator, w, set.pick(r));
+                    try sc.insert(tt.allocator, w, set.pick(r), 0.1 + r.float(f32) * 0.9);
+                    set.ids[set.n] = w;
+                    set.n += 1;
+                },
+                3 => if (set.pick(r)) |w| {
+                    d.remove(tt.allocator, w);
+                    sc.remove(tt.allocator, w);
+                    set.del(w);
+                },
+                4 => if (set.pick(r)) |a| if (set.pick(r)) |b| d.swap(a, b),
+                5 => if (set.pick(r)) |w| {
+                    d.toggleSplit(w);
+                    d.resize(w, r.intRangeAtMost(i32, -20000, 20000), r.intRangeAtMost(i32, -20000, 20000), r.boolean());
+                    sc.resize(w, r.intRangeAtMost(i32, -20000, 20000), area.w);
+                },
+                6 => if (set.pick(r)) |w| sc.move(w, r.enumValue(Dir)),
+                7 => if (set.pick(r)) |w| try sc.merge(tt.allocator, w, r.enumValue(Dir)),
+                8 => if (set.pick(r)) |w| {
+                    try sc.expel(tt.allocator, w);
+                    sc.cycleWidth(w, &.{ 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0 });
+                },
+                else => {
+                    var cd: Check = .{};
+                    d.arrange(area, gap, &cd);
+                    try cd.same(&set);
+                    var cs: Check = .{};
+                    sc.arrange(area, gap, set.pick(r), r.boolean(), &cs);
+                    try cs.same(&set);
+                },
+            }
+        }
+    }
 }

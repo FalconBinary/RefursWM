@@ -64,6 +64,8 @@ const Keyboard = struct {
         const ev = wm.ptr(c.struct_wlr_keyboard_key_event, data);
         c.wlr_idle_notifier_v1_notify_activity(s.idle, s.seat);
         const code = ev.keycode;
+        // evdev codes end at 0x2ff; a virtual keyboard may send any u32
+        if (code > 0xffff) return;
         if (ev.state == c.WL_KEYBOARD_KEY_STATE_PRESSED) {
             if (k.handle(code + 8)) {
                 if (code < swallowed.capacity()) swallowed.set(code);
@@ -222,7 +224,7 @@ pub fn forget(v: *View) void {
 }
 
 fn px(x: f64) i32 {
-    return @intFromFloat(@round(x));
+    return wm.L.px(x);
 }
 
 fn motion(time: u32) void {
@@ -231,8 +233,8 @@ fn motion(time: u32) void {
     const cy = s.cursor.y;
     if (grab_view) |v| switch (grab) {
         .move => {
-            v.box.x = grab_box.x + px(cx - grab_x);
-            v.box.y = grab_box.y + px(cy - grab_y);
+            v.box.x = grab_box.x +| px(cx - grab_x);
+            v.box.y = grab_box.y +| px(cy - grab_y);
             return v.place();
         },
         .resize => {
@@ -240,13 +242,13 @@ fn motion(time: u32) void {
             const dy = px(cy - grab_y);
             var b = grab_box;
             if (grab_edges & c.WLR_EDGE_LEFT != 0) {
-                b.x += dx;
-                b.w -= dx;
-            } else if (grab_edges & c.WLR_EDGE_RIGHT != 0) b.w += dx;
+                b.x +|= dx;
+                b.w -|= dx;
+            } else if (grab_edges & c.WLR_EDGE_RIGHT != 0) b.w +|= dx;
             if (grab_edges & c.WLR_EDGE_TOP != 0) {
-                b.y += dy;
-                b.h -= dy;
-            } else if (grab_edges & c.WLR_EDGE_BOTTOM != 0) b.h += dy;
+                b.y +|= dy;
+                b.h -|= dy;
+            } else if (grab_edges & c.WLR_EDGE_BOTTOM != 0) b.h +|= dy;
             if (b.w < 60 or b.h < 40) return;
             v.box = b;
             v.configure();

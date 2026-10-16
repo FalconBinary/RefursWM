@@ -12,6 +12,7 @@ const cfg = wm.cfg;
 const L = wm.L;
 const Box = wm.Box;
 const Listener = wm.Listener;
+const client = @import("client.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -22,6 +23,7 @@ pub const View = struct {
     content: *c.struct_wlr_scene_tree = undefined,
     rects: [4]*c.struct_wlr_scene_rect = undefined,
     deco: ?*c.struct_wlr_xdg_toplevel_decoration_v1 = null,
+    owner: *client.State,
 
     ws: u8 = 0,
     mapped: bool = false,
@@ -39,7 +41,7 @@ pub const View = struct {
     /// what effects() last applied, so the common case (opaque, square) costs nothing per commit
     cur_opacity: f32 = 1.0,
     cur_radius: i32 = 0,
-    last_geo: c.struct_wlr_box = .{},
+    last_geo: Box = .{},
 
     l_map: Listener = zero,
     l_unmap: Listener = zero,
@@ -54,6 +56,12 @@ pub const View = struct {
 
     pub fn surface(v: *View) *c.struct_wlr_surface {
         return v.xdg.base.*.surface;
+    }
+
+    /// The window geometry the client set, clamped: a client may send any i32 (see Box.sanitize).
+    fn geometry(v: *View) Box {
+        const g = v.xdg.base.*.geometry;
+        return (Box{ .x = g.x, .y = g.y, .w = g.width, .h = g.height }).sanitize();
     }
 
     pub fn setEnabled(v: *View, on: bool) void {
@@ -85,13 +93,13 @@ pub const View = struct {
         v.setEnabled(true);
 
         c.wlr_scene_node_set_position(&v.tree.node, inner.x, inner.y);
-        const g = v.xdg.base.*.geometry;
+        const g = v.geometry();
         v.last_geo = g;
         c.wlr_scene_node_set_position(&v.content.node, -g.x, -g.y);
         const cv = L.intersect(inner, bound);
         c.wlr_scene_node_set_enabled(&v.content.node, !cv.empty());
         if (!cv.empty()) {
-            var clip: c.struct_wlr_box = .{ .x = g.x + cv.x - inner.x, .y = g.y + cv.y - inner.y, .width = cv.w, .height = cv.h };
+            var clip: c.struct_wlr_box = .{ .x = g.x +| (cv.x -| inner.x), .y = g.y +| (cv.y -| inner.y), .width = cv.w, .height = cv.h };
             c.wlr_scene_subsurface_tree_set_clip(&v.content.node, &clip);
         }
         v.placeBorder(inner, bw, bound);
@@ -209,11 +217,11 @@ pub const View = struct {
     fn onCommit(v: *View, _: ?*anyopaque) void {
         if (v.xdg.base.*.initial_commit) return v.initialCommit();
         if (!v.mapped) return;
-        const g = v.xdg.base.*.geometry;
-        if (g.x != v.last_geo.x or g.y != v.last_geo.y or g.width != v.last_geo.width or g.height != v.last_geo.height) {
-            if (v.floating and !v.fullscreen and g.width > 0) {
-                v.box.w = g.width + 2 * cfg.border;
-                v.box.h = g.height + 2 * cfg.border;
+        const g = v.geometry();
+        if (!std.meta.eql(g, v.last_geo)) {
+            if (v.floating and !v.fullscreen) {
+                v.box.w = g.w + 2 * cfg.border;
+                v.box.h = g.h + 2 * cfg.border;
             }
             v.place();
         }
@@ -223,9 +231,9 @@ pub const View = struct {
     fn onMap(v: *View, _: ?*anyopaque) void {
         v.mapped = true;
         if (v.floating) {
-            const g = v.xdg.base.*.geometry;
-            v.box.w = @max(1, g.width) + 2 * cfg.border;
-            v.box.h = @max(1, g.height) + 2 * cfg.border;
+            const g = v.geometry();
+            v.box.w = g.w + 2 * cfg.border;
+            v.box.h = g.h + 2 * cfg.border;
             // centre over the parent window, else on the monitor
             var around: Box = if (s.ws[v.ws].output) |o| wm.area(o) else .{ .w = v.box.w, .h = v.box.h };
             if (v.xdg.parent) |p| if (viewOfToplevel(p)) |pv| if (pv.mapped) {
@@ -258,6 +266,7 @@ pub const View = struct {
         wm.unstack(v);
         for ([_]*Listener{ &v.l_map, &v.l_unmap, &v.l_commit, &v.l_destroy, &v.l_move, &v.l_resize, &v.l_fullscreen, &v.l_maximize, &v.l_deco_mode, &v.l_deco_destroy }) |l| wm.off(l);
         c.wlr_scene_node_destroy(&v.tree.node);
+        client.give(v.owner, .views);
         wm.gpa.destroy(v);
     }
 
@@ -295,18 +304,19 @@ pub const View = struct {
 
 pub fn onNewToplevel(data: ?*anyopaque) void {
     const xdg = wm.ptr(c.struct_wlr_xdg_toplevel, data);
-    const tree = c.wlr_scene_tree_create(s.layers.tiled) orelse return;
-    const v = wm.gpa.create(View) catch return c.wlr_scene_node_destroy(&tree.*.node);
-    v.* = .{ .xdg = xdg, .tree = tree, .ws = if (s.mon) |o| o.ws else 0 };
+    const owner = client.take(client.of(xdg.resource), .views) orelse return;
+    newView(xdg, owner) catch client.give(owner, .views);
+}
+
+fn newView(xdg: *c.struct_wlr_xdg_toplevel, owner: *client.State) !void {
+    const tree = c.wlr_scene_tree_create(s.layers.tiled) orelse return error.OutOfMemory;
+    errdefer c.wlr_scene_node_destroy(&tree.*.node);
+    const v = try wm.gpa.create(View);
+    errdefer wm.gpa.destroy(v);
+    v.* = .{ .xdg = xdg, .tree = tree, .owner = owner, .ws = if (s.mon) |o| o.ws else 0 };
     const black = [4]f32{ 0, 0, 0, 1 };
-    for (&v.rects) |*r| r.* = c.wlr_scene_rect_create(tree, 0, 0, &black) orelse {
-        c.wlr_scene_node_destroy(&tree.*.node);
-        return wm.gpa.destroy(v);
-    };
-    v.content = c.wlr_scene_subsurface_tree_create(tree, xdg.base.*.surface) orelse {
-        c.wlr_scene_node_destroy(&tree.*.node);
-        return wm.gpa.destroy(v);
-    };
+    for (&v.rects) |*r| r.* = c.wlr_scene_rect_create(tree, 0, 0, &black) orelse return error.OutOfMemory;
+    v.content = c.wlr_scene_subsurface_tree_create(tree, xdg.base.*.surface) orelse return error.OutOfMemory;
     tree.*.node.data = &v.tag;
     xdg.base.*.data = tree;
     c.wlr_scene_node_set_enabled(&tree.*.node, false);
@@ -354,6 +364,7 @@ pub fn onActivate(data: ?*anyopaque) void {
 
 const Popup = struct {
     xdg: *c.struct_wlr_xdg_popup,
+    owner: *client.State,
     l_commit: Listener = zero,
     l_destroy: Listener = zero,
 
@@ -376,14 +387,16 @@ const Popup = struct {
             (if (s.mon) |m| m.wlr else return);
         var ob: c.struct_wlr_box = undefined;
         c.wlr_output_layout_get_box(s.output_layout, wo, &ob);
-        ob.x -= lx;
-        ob.y -= ly;
+        // scene coordinates of nested popups come from client-controlled positioners
+        ob.x -|= lx;
+        ob.y -|= ly;
         c.wlr_xdg_popup_unconstrain_from_box(p.xdg, &ob);
     }
 
     fn onDestroy(p: *Popup, _: ?*anyopaque) void {
         wm.off(&p.l_commit);
         wm.off(&p.l_destroy);
+        client.give(p.owner, .popups);
         wm.gpa.destroy(p);
     }
 };
@@ -398,7 +411,12 @@ pub fn onNewPopup(data: ?*anyopaque) void {
         ptree = ls.*.data;
     }
     const pt: *c.struct_wlr_scene_tree = @ptrCast(@alignCast(ptree orelse return));
-    const tree = c.wlr_scene_xdg_surface_create(pt, xp.base) orelse return;
+    const owner = client.take(client.of(xp.resource), .popups) orelse return;
+    const p = wm.gpa.create(Popup) catch return client.give(owner, .popups);
+    const tree = c.wlr_scene_xdg_surface_create(pt, xp.base) orelse {
+        wm.gpa.destroy(p);
+        return client.give(owner, .popups);
+    };
     xp.base.*.data = tree;
     // menus of a tiled window must cover its neighbours
     var up: ?*c.struct_wlr_scene_tree = pt;
@@ -407,8 +425,7 @@ pub fn onNewPopup(data: ?*anyopaque) void {
         if (tag.* == .view) c.wlr_scene_node_raise_to_top(&u.node);
         break;
     };
-    const p = wm.gpa.create(Popup) catch return;
-    p.* = .{ .xdg = xp };
+    p.* = .{ .xdg = xp, .owner = owner };
     wm.on(&xp.base.*.surface.*.events.commit, &p.l_commit, wm.cb(Popup, "l_commit", Popup.onCommit));
     wm.on(&xp.events.destroy, &p.l_destroy, wm.cb(Popup, "l_destroy", Popup.onDestroy));
 }
