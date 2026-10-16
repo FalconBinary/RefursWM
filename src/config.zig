@@ -99,16 +99,31 @@ pub const rules = [_]t.Rule{
 
 // ------------------------------------------------------------------ безопасность
 
-/// Привилегированные протоколы. Выключены = любое приложение НЕ может читать экран,
-/// буфер обмена в фоне, эмулировать клавиатуру/мышь или менять гамму.
-/// Даже включённые, они скрыты от sandbox-клиентов (flatpak и т.п. через security-context-v1).
-pub const allow_screencopy = false; // grim, wf-recorder, OBS
-pub const allow_data_control = false; // менеджеры буфера обмена (cliphist, wl-paste --watch)
-pub const allow_virtual_input = false; // wtype, ydotool-подобные, wayvnc
-pub const allow_gamma_control = false; // gammastep, wlsunset
+/// Привилегированные протоколы: снимок экрана, буфер обмена в фоне, виртуальные клавиатура/мышь,
+/// гамма. Их получает ТОЛЬКО программа, которую запустил сам RefursWM (хоткей, автозапуск,
+/// REFURS_STARTUP), и только если её абсолютный путь есть в этом списке: она получает свой
+/// приватный сокет с нужными протоколами. Та же программа, набранная в терминале, и любой
+/// вредонос под вашим пользователем этих протоколов не увидят. Программы в песочнице
+/// (flatpak, сокет `wayland-N-sandbox`) не получают их никогда.
+///   .screencopy    — grim, wf-recorder, OBS
+///   .data_control  — история буфера (wl-paste --watch cliphist store)
+///   .virtual_input — wayvnc, wtype
+///   .gamma         — wlsunset, gammastep
+pub const grants = [_]t.Grant{
+    .{ .path = "/usr/bin/grim", .caps = .{ .screencopy = true } },
+    // .{ .path = "/usr/bin/wl-paste", .caps = .{ .data_control = true } },
+    // .{ .path = "/usr/bin/wayvnc", .caps = .{ .screencopy = true, .virtual_input = true } },
+    // .{ .path = "/usr/bin/wlsunset", .caps = .{ .gamma = true } },
+};
 
-/// Чем блокировать экран (ext-session-lock-v1). Хоткей `.lock`.
-pub const lock_command: t.Cmd = &.{"swaylock"};
+/// Чем блокировать экран (ext-session-lock-v1). Хоткей `.lock`. Абсолютный путь: подменить
+/// локер, положив свой `swaylock` в каталог из $PATH, не выйдет.
+pub const lock_command: t.Cmd = &.{"/usr/bin/swaylock"};
+
+/// Приоритет реального времени (SCHED_RR) для композитора: курсор и кадры не тормозят, когда
+/// процессор занят сборкой или игрой. Нужен лимит rtprio (см. README); без него — тихо пропускается.
+/// Запущенные программы его не наследуют.
+pub const realtime = true;
 
 // ------------------------------------------------------------------ автозапуск
 
@@ -132,6 +147,8 @@ pub const launcher: t.Cmd = &.{"fuzzel"};
 pub const binds = [_]t.Bind{
     .{ .mods = S, .key = "Return", .action = .{ .spawn = terminal } },
     .{ .mods = S, .key = "d", .action = .{ .spawn = launcher } },
+    // снимок экрана в $XDG_PICTURES_DIR (grim из списка grants)
+    .{ .mods = 0, .key = "Print", .action = .{ .spawn = &.{"/usr/bin/grim"} } },
     .{ .mods = S, .key = "q", .action = .close },
     .{ .mods = SS, .key = "e", .action = .quit },
     .{ .mods = S, .key = "l", .action = .lock },

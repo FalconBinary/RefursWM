@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.option(std.builtin.Optimize, "optimize", "build mode (default safe = ReleaseSafe)") orelse .safe;
 
     const tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/layout.zig"),
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
     }) });

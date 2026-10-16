@@ -12,6 +12,9 @@ const view = @import("view.zig");
 const output = @import("output.zig");
 const input = @import("input.zig");
 const client = @import("client.zig");
+const launcher = @import("launcher.zig");
+const policy = @import("policy.zig");
+const sandbox = @import("sandbox.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(wm.Listener);
 
@@ -43,18 +46,24 @@ fn tree(parent: *c.struct_wlr_scene_tree) *c.struct_wlr_scene_tree {
     return c.wlr_scene_tree_create(parent) orelse @panic("out of memory");
 }
 
-/// Hides privileged globals from sandboxed clients (flatpak etc. tag their connection
-/// with security-context-v1). Unsandboxed clients see what the config enables.
+/// Who sees which global: policy.allowGlobal. Privileged globals reach only connections RefursWM
+/// opened for a granted program; layer-shell, lock and idle-notify never reach sandboxes.
 fn globalFilter(cl: ?*const c.struct_wl_client, global: ?*const c.struct_wl_global, _: ?*anyopaque) callconv(.c) bool {
-    for (s.privileged.items) |g| if (g == global) {
-        return c.wlr_security_context_manager_v1_lookup_client(s.security, cl) == null;
-    };
+    for (s.restricted.items) |r| if (r.global == global)
+        return policy.allowGlobal(r.class, client.caps(cl), client.sandboxed(cl), wm.testing);
     return true;
 }
 
-fn privileged(g: ?*c.struct_wl_global) void {
-    if (g) |x| s.privileged.append(wm.gpa, x) catch {};
+fn restrict(g: ?*c.struct_wl_global, class: policy.Class) void {
+    if (g) |x| s.restricted.append(wm.gpa, .{ .global = x, .class = class }) catch {};
 }
+
+/// Capabilities some grant needs: only their globals exist at all (all of them in test builds).
+const granted: wm.T.Caps = blk: {
+    var u: u8 = 0;
+    for (cfg.grants) |g| u |= @as(u8, @bitCast(g.caps));
+    break :blk @bitCast(u);
+};
 
 const Inhibitor = struct {
     owner: *client.State,
@@ -138,8 +147,8 @@ fn setup() !void {
     wm.on(&layer.*.events.new_surface, &l_new_layer, wm.gcb(output.onNewLayerSurface));
     const deco = c.wlr_xdg_decoration_manager_v1_create(dsp) orelse return error.Decoration;
     wm.on(&deco.*.events.new_toplevel_decoration, &l_new_deco, wm.gcb(view.onNewDecoration));
-    const act = c.wlr_xdg_activation_v1_create(dsp) orelse return error.Activation;
-    wm.on(&act.*.events.request_activate, &l_activate, wm.gcb(view.onActivate));
+    s.activation = c.wlr_xdg_activation_v1_create(dsp) orelse return error.Activation;
+    wm.on(&s.activation.events.request_activate, &l_activate, wm.gcb(view.onActivate));
 
     s.cursor = c.wlr_cursor_create() orelse return error.Cursor;
     c.wlr_cursor_attach_output_layout(s.cursor, s.output_layout);
@@ -168,31 +177,36 @@ fn setup() !void {
     const lock = c.wlr_session_lock_manager_v1_create(dsp) orelse return error.Lock;
     wm.on(&lock.*.events.new_lock, &l_new_lock, wm.gcb(output.onNewLock));
 
-    // sandboxed clients may not draw over everything or lock the screen either
     s.security = c.wlr_security_context_manager_v1_create(dsp) orelse return error.Security;
-    privileged(layer.*.global);
-    privileged(lock.*.global);
-    if (cfg.allow_screencopy or wm.testing) {
-        privileged(if (c.wlr_screencopy_manager_v1_create(dsp)) |x| x.*.global else null);
-        privileged(if (c.wlr_ext_image_copy_capture_manager_v1_create(dsp, 1)) |x| x.*.global else null);
-        privileged(if (c.wlr_ext_output_image_capture_source_manager_v1_create(dsp, 1)) |x| x.*.global else null);
+    // sandboxes may not draw over everything, fake a lock screen or watch the user's presence
+    restrict(layer.*.global, .sandbox_hidden);
+    restrict(lock.*.global, .sandbox_hidden);
+    restrict(s.idle.global, .sandbox_hidden);
+    const all = wm.testing;
+    if (granted.screencopy or all) {
+        const cls: policy.Class = .{ .privileged = .{ .screencopy = true } };
+        restrict(if (c.wlr_screencopy_manager_v1_create(dsp)) |x| x.*.global else null, cls);
+        restrict(if (c.wlr_ext_image_copy_capture_manager_v1_create(dsp, 1)) |x| x.*.global else null, cls);
+        restrict(if (c.wlr_ext_output_image_capture_source_manager_v1_create(dsp, 1)) |x| x.*.global else null, cls);
     }
-    if (cfg.allow_data_control) {
-        privileged(if (c.wlr_data_control_manager_v1_create(dsp)) |x| x.*.global else null);
-        privileged(if (c.wlr_ext_data_control_manager_v1_create(dsp, 1)) |x| x.*.global else null);
+    if (granted.data_control or all) {
+        const cls: policy.Class = .{ .privileged = .{ .data_control = true } };
+        restrict(if (c.wlr_data_control_manager_v1_create(dsp)) |x| x.*.global else null, cls);
+        restrict(if (c.wlr_ext_data_control_manager_v1_create(dsp, 1)) |x| x.*.global else null, cls);
     }
-    if (cfg.allow_virtual_input or wm.testing) {
+    if (granted.virtual_input or all) {
+        const cls: policy.Class = .{ .privileged = .{ .virtual_input = true } };
         const vk = c.wlr_virtual_keyboard_manager_v1_create(dsp) orelse return error.VirtualInput;
         wm.on(&vk.*.events.new_virtual_keyboard, &l_vkbd, wm.gcb(input.onVirtualKeyboard));
-        privileged(vk.*.global);
+        restrict(vk.*.global, cls);
         const vp = c.wlr_virtual_pointer_manager_v1_create(dsp) orelse return error.VirtualInput;
         wm.on(&vp.*.events.new_virtual_pointer, &l_vptr, wm.gcb(input.onVirtualPointer));
-        privileged(vp.*.global);
+        restrict(vp.*.global, cls);
     }
-    if (cfg.allow_gamma_control) {
+    if (granted.gamma or all) {
         const g = c.wlr_gamma_control_manager_v1_create(dsp) orelse return error.Gamma;
         c.wlr_scene_set_gamma_control_manager_v1(s.scene, g);
-        privileged(g.*.global);
+        restrict(g.*.global, .{ .privileged = .{ .gamma = true } });
     }
     c.wl_display_set_global_filter(dsp, globalFilter, null);
 }
@@ -205,15 +219,66 @@ fn onTerminate(_: c_int, _: ?*anyopaque) callconv(.c) c_int {
     return 0;
 }
 
+/// $XDG_RUNTIME_DIR/wayland-N-sandbox: its clients are treated like flatpak clients (no
+/// layer-shell, lock, idle-notify or privileged globals, no focus stealing). Bind-mount it into
+/// bwrap & co instead of the main socket.
+fn addSandboxSocket(loop: ?*c.struct_wl_event_loop, name: []const u8) void {
+    const dir = std.mem.span(c.getenv("XDG_RUNTIME_DIR") orelse return);
+    var addr: std.os.linux.sockaddr.un = .{ .path = @splat(0) };
+    const path = std.fmt.bufPrintSentinel(addr.path[0 .. addr.path.len - 1], "{s}/{s}-sandbox", .{ dir, name }, 0) catch
+        return wm.log("sandbox socket: path too long", .{});
+    _ = c.unlink(path.ptr);
+    const lx = std.os.linux;
+    const rc = lx.socket(lx.AF.UNIX, lx.SOCK.STREAM | lx.SOCK.CLOEXEC | lx.SOCK.NONBLOCK, 0);
+    if (lx.errno(rc) != .SUCCESS) return;
+    const fd: c_int = @intCast(rc);
+    const old = c.umask(0o077);
+    const bound = lx.errno(lx.bind(fd, @ptrCast(&addr), @sizeOf(lx.sockaddr.un))) == .SUCCESS and
+        lx.errno(lx.listen(fd, 128)) == .SUCCESS;
+    _ = c.umask(old);
+    if (!bound or c.wl_event_loop_add_fd(loop, fd, c.WL_EVENT_READABLE, onSandboxClient, null) == null) {
+        _ = c.close(fd);
+        return wm.log("cannot create the sandbox socket", .{});
+    }
+}
+
+fn onSandboxClient(fd: c_int, _: u32, _: ?*anyopaque) callconv(.c) c_int {
+    const lx = std.os.linux;
+    const rc = lx.accept4(fd, null, null, lx.SOCK.CLOEXEC);
+    if (lx.errno(rc) != .SUCCESS) return 0;
+    const cfd: c_int = @intCast(rc);
+    const cl = c.wl_client_create(s.display, cfd) orelse {
+        _ = c.close(cfd);
+        return 0;
+    };
+    // marked before its first request is read: it never sees a restricted global
+    const st = client.ensure(cl) orelse {
+        c.wl_client_destroy(cl);
+        return 0;
+    };
+    st.sandboxed = true;
+    return 0;
+}
+
 pub fn main() u8 {
-    c.wlr_log_init(if (c.getenv("REFURS_DEBUG") != null) c.WLR_DEBUG else c.WLR_ERROR, null);
-    // children are reaped by the kernel; a dead client socket must not kill us
+    // first of all, while the process holds nothing: drop the terminal, fork the launcher
     var sa = std.mem.zeroes(c.struct_sigaction);
+    sa.__sigaction_handler.sa_handler = ignore;
+    _ = c.sigaction(c.SIGHUP, &sa, null);
+    // a dead client socket must not kill us
+    _ = c.sigaction(c.SIGPIPE, &sa, null);
+    sandbox.detachTty();
+    launcher.start();
+    // the launcher is the only child; the kernel reaps it
+    sa = std.mem.zeroes(c.struct_sigaction);
     sa.sa_flags = c.SA_NOCLDWAIT;
     _ = c.sigaction(c.SIGCHLD, &sa, null);
-    sa.sa_flags = 0;
-    sa.__sigaction_handler.sa_handler = ignore;
-    _ = c.sigaction(c.SIGPIPE, &sa, null);
+    sandbox.raiseFdLimit();
+    const rt = cfg.realtime and sandbox.realtime();
+    sandbox.dropCaps();
+    sandbox.noDump();
+
+    c.wlr_log_init(if (c.getenv("REFURS_DEBUG") != null) c.WLR_DEBUG else c.WLR_ERROR, null);
 
     setup() catch |e| {
         wm.log("startup failed: {s}", .{@errorName(e)});
@@ -227,39 +292,14 @@ pub fn main() u8 {
         wm.log("cannot start the backend", .{});
         return 1;
     }
-    _ = c.setenv("WAYLAND_DISPLAY", sock, 1);
-    _ = c.setenv("XDG_CURRENT_DESKTOP", "RefursWM", 1);
-    _ = c.setenv("XDG_SESSION_TYPE", "wayland", 1);
-    _ = c.unsetenv("DISPLAY");
-    var size_buf: [16]u8 = undefined;
-    if (std.fmt.bufPrintSentinel(&size_buf, "{d}", .{cfg.cursor_size}, 0)) |sz| {
-        _ = c.setenv("XCURSOR_SIZE", sz.ptr, 1);
-    } else |_| {}
-    if (cfg.cursor_theme) |th| _ = c.setenv("XCURSOR_THEME", th, 1);
-    wm.log("running on WAYLAND_DISPLAY={s}", .{sock});
+    const name = std.mem.span(sock);
+    addSandboxSocket(c.wl_display_get_event_loop(s.display), name);
+    wm.log("running on WAYLAND_DISPLAY={s} (sandboxes: {s}-sandbox), realtime: {s}", .{ name, name, if (rt) "on" else "off" });
 
-    const hooks: []const wm.T.Cmd = if (s.theme == .dark) &cfg.theme_hooks_dark else &cfg.theme_hooks_light;
-    for (hooks) |h| wm.spawn(h);
-    for (cfg.autostart) |cmd| wm.spawn(cmd);
-    // REFURS_STARTUP="prog arg" runs one extra program (handy for tests); split on spaces, no shell
-    if (c.getenv("REFURS_STARTUP")) |st| {
-        var args: [16][*:0]const u8 = undefined;
-        var n: usize = 0;
-        var buf: [512:0]u8 = @splat(0);
-        const src = std.mem.span(st);
-        if (src.len < buf.len) {
-            @memcpy(buf[0..src.len], src);
-            for (buf[0..src.len]) |*ch| if (ch.* == ' ') {
-                ch.* = 0;
-            };
-            var it = std.mem.tokenizeScalar(u8, buf[0..src.len], 0);
-            while (it.next()) |tok| if (n < args.len) {
-                args[n] = @ptrCast(tok.ptr);
-                n += 1;
-            };
-            wm.spawn(args[0..n]);
-        }
-    }
+    launcher.setDisplay(name);
+    wm.themeHooks();
+    inline for (cfg.autostart) |cmd| launcher.spawn(cmd, false);
+    launcher.startup();
 
     c.wl_display_run(s.display);
 

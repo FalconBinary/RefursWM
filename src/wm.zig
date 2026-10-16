@@ -12,6 +12,8 @@ pub const T = @import("types.zig");
 pub const L = @import("layout.zig");
 pub const testing = @import("build_options").testing;
 pub const View = @import("view.zig").View;
+const launcher = @import("launcher.zig");
+const policy = @import("policy.zig");
 const outmod = @import("output.zig");
 pub const Output = outmod.Output;
 pub const LayerSurf = outmod.LayerSurf;
@@ -88,6 +90,7 @@ pub const Server = struct {
     relptr: *c.struct_wlr_relative_pointer_manager_v1 = undefined,
     idle: *c.struct_wlr_idle_notifier_v1 = undefined,
     tearing: *c.struct_wlr_tearing_control_manager_v1 = undefined,
+    activation: *c.struct_wlr_xdg_activation_v1 = undefined,
     security: *c.struct_wlr_security_context_manager_v1 = undefined,
     layers: Layers = .{},
 
@@ -111,9 +114,11 @@ pub const Server = struct {
     lock: ?*c.struct_wlr_session_lock_v1 = null,
 
     inhibitors: u32 = 0,
-    /// globals hidden from sandboxed (security-context) clients
-    privileged: std.ArrayList(*c.struct_wl_global) = .empty,
+    /// globals not offered to every client, see policy.Class
+    restricted: std.ArrayList(Restricted) = .empty,
 };
+
+pub const Restricted = struct { global: *c.struct_wl_global, class: policy.Class };
 
 pub var s: Server = .{};
 
@@ -168,33 +173,6 @@ pub fn palette() T.Palette {
 /// wlr_scene colours are premultiplied
 pub fn premul(col: T.Color) [4]f32 {
     return .{ col[0] * col[3], col[1] * col[3], col[2] * col[3], col[3] };
-}
-
-// ------------------------------------------------------------------ processes
-
-extern var environ: [*c][*c]u8;
-
-/// posix_spawnp (vfork-fast), no shell. The child gets its own session, default signal handlers
-/// and an empty signal mask; wayland fds are CLOEXEC so it inherits none of ours.
-pub fn spawn(cmd: T.Cmd) void {
-    if (cmd.len == 0 or cmd.len > 32) return;
-    var argv: [33]?[*:0]const u8 = @splat(null);
-    for (cmd, 0..) |a, i| argv[i] = a;
-    var attr: c.posix_spawnattr_t = undefined;
-    if (c.posix_spawnattr_init(&attr) != 0) return;
-    defer _ = c.posix_spawnattr_destroy(&attr);
-    var def: c.sigset_t = undefined;
-    _ = c.sigemptyset(&def);
-    _ = c.sigaddset(&def, c.SIGCHLD);
-    _ = c.sigaddset(&def, c.SIGPIPE);
-    var mask: c.sigset_t = undefined;
-    _ = c.sigemptyset(&mask);
-    _ = c.posix_spawnattr_setsigdefault(&attr, &def);
-    _ = c.posix_spawnattr_setsigmask(&attr, &mask);
-    _ = c.posix_spawnattr_setflags(&attr, c.POSIX_SPAWN_SETSID | c.POSIX_SPAWN_SETSIGDEF | c.POSIX_SPAWN_SETSIGMASK);
-    var pid: c.pid_t = 0;
-    const rc = c.posix_spawnp(&pid, argv[0].?, null, &attr, @ptrCast(&argv), environ);
-    if (rc != 0) log("cannot run {s}: error {d}", .{ cmd[0], rc });
 }
 
 // ------------------------------------------------------------------ focus
@@ -553,16 +531,23 @@ fn toggleTheme() void {
     s.theme = if (s.theme == .dark) .light else .dark;
     for (s.views.items) |v| v.recolor();
     for (s.outputs.items) |o| c.wlr_scene_rect_set_color(o.bg, &premul(palette().background));
-    const hooks: []const T.Cmd = if (s.theme == .dark) &cfg.theme_hooks_dark else &cfg.theme_hooks_light;
-    for (hooks) |h| spawn(h);
+    themeHooks();
 }
 
-pub fn run(a: T.Action) void {
+/// Tells GTK/Qt/portals about the theme (gsettings by default).
+pub fn themeHooks() void {
+    if (s.theme == .dark) {
+        inline for (cfg.theme_hooks_dark) |h| launcher.spawn(h, false);
+    } else inline for (cfg.theme_hooks_light) |h| launcher.spawn(h, false);
+}
+
+/// A key binding; comptime, so a spawn is just an index into the launcher's command table.
+pub fn run(comptime a: T.Action) void {
     const f = s.focused;
     switch (a) {
-        .spawn => |cmd| spawn(cmd),
+        .spawn => |cmd| launcher.spawn(cmd, true),
         .quit => c.wl_display_terminate(s.display),
-        .lock => spawn(cfg.lock_command),
+        .lock => launcher.spawn(cfg.lock_command, false),
         .toggle_theme => toggleTheme(),
         .workspace => |n| if (n >= 1 and n <= WS) showWorkspace(n - 1),
         .toggle_mode => if (s.mon) |o| toggleMode(o.ws),

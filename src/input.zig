@@ -20,6 +20,9 @@ const BTN_RIGHT = 0x111;
 const IGNORED_MODS: u32 = c.WLR_MODIFIER_CAPS | c.WLR_MODIFIER_MOD2;
 
 var syms: [cfg.binds.len]u32 = undefined;
+const plain_binds = for (cfg.binds) |b| {
+    if (b.mods == 0) break true;
+} else false;
 var keymap: ?*c.struct_xkb_keymap = null;
 var keyboards: u32 = 0;
 /// keys whose press was a binding: their release must not reach the client either
@@ -91,7 +94,8 @@ const Keyboard = struct {
             }
         }
         const mods = c.wlr_keyboard_get_modifiers(k.wlr) & ~IGNORED_MODS;
-        if (mods == 0) return false;
+        // plain typing never walks the binding table, unless the config binds a bare key (Print)
+        if (mods == 0 and !plain_binds) return false;
         const km = k.wlr.keymap orelse return false;
         var raw: [*c]const c.xkb_keysym_t = null;
         const nr = c.xkb_keymap_key_get_syms_by_level(km, keycode, 0, 0, &raw);

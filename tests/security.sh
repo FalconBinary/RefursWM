@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Security regression tests, headless (pixman, no GPU). A hostile client (tests/evil) tries to crash
 # RefursWM with extreme values, flood it with objects, take the clipboard from the background, steal
-# the focus and keep the session from going idle while hidden. Each check gets a fresh compositor.
-# usage: tests/security.sh BIN EVIL OUTDIR      (BIN built with -Dtesting=true)
+# the focus and keep the session from going idle while hidden. Then, with a normal build: who gets
+# the privileged protocols, what the sandbox socket offers. Each check gets a fresh compositor.
+# usage: tests/security.sh TESTING_BIN NORMAL_BIN EVIL OUTDIR   (TESTING_BIN built with -Dtesting=true)
 set -u
-BIN=$1; EVIL=$2; OUT=$3
+BIN=$1; NORMAL=$2; EVIL=$3; OUT=$4
 mkdir -p "$OUT"
 R=$OUT/result.txt
 : >"$R"
@@ -92,6 +93,29 @@ wtype -M logo -k 2 -m logo
 sleep 3
 if [ -e "$OUT/idled" ]; then ok "idle inhibit: hidden window does not"; else bad "idle inhibit" "hidden window still blocks idle"; fi
 stop inhibit
+
+# ---- normal build: privileged protocols only for programs RefursWM starts with a grant
+BIN=$NORMAL
+PRIV="zwlr_screencopy_manager_v1|ext_image_copy_capture_manager_v1|zwlr_data_control_manager_v1|ext_data_control_manager_v1|zwp_virtual_keyboard_manager_v1|zwlr_virtual_pointer_manager_v1|zwlr_gamma_control_manager_v1"
+export REFURS_STARTUP="/usr/bin/grim $OUT/granted.png"
+rm -f "$OUT/granted.png" "$OUT/shell.png"
+start privileges
+unset REFURS_STARTUP
+sleep 2
+if [ -s "$OUT/granted.png" ]; then ok "grant: grim started by RefursWM captures the screen"; else bad grant "granted grim got no screenshot"; fi
+if grim "$OUT/shell.png" >"$OUT/grim-shell.txt" 2>&1; then bad grant "grim from a shell captured the screen"
+else ok "grant: grim from a shell cannot ($(head -n 1 "$OUT/grim-shell.txt"))"; fi
+"$EVIL" registry >"$OUT/registry-main.txt" 2>&1
+if grep -Eq "$PRIV" "$OUT/registry-main.txt"; then bad "main socket" "offers $(grep -E "$PRIV" "$OUT/registry-main.txt" | tr '\n' ' ')"
+elif grep -q zwlr_layer_shell_v1 "$OUT/registry-main.txt"; then ok "main socket: no privileged globals"
+else bad "main socket" "registry incomplete"; fi
+WAYLAND_DISPLAY=wayland-0-sandbox "$EVIL" registry >"$OUT/registry-sandbox.txt" 2>&1
+HIDDEN="$PRIV|zwlr_layer_shell_v1|ext_session_lock_manager_v1|ext_idle_notifier_v1"
+if grep -Eq "$HIDDEN" "$OUT/registry-sandbox.txt"; then bad "sandbox socket" "offers $(grep -E "$HIDDEN" "$OUT/registry-sandbox.txt" | tr '\n' ' ')"
+elif grep -q wl_compositor "$OUT/registry-sandbox.txt"; then ok "sandbox socket: no layer-shell, lock, idle-notify or privileged globals"
+else bad "sandbox socket" "cannot connect"; fi
+if pgrep -P "$WM" -x refurs-launcher >/dev/null; then ok "launcher: running"; else bad launcher "no refurs-launcher child"; fi
+stop privileges
 
 echo "failures: $fails" | tee -a "$R"
 exit "$fails"

@@ -1,12 +1,15 @@
 // Copyright (c) 2026 Denys (FalconBinary)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Per-client bookkeeping, kept in the wl_client user data (wlroots leaves that slot alone).
-//! Object limits: one client cannot flood the compositor with windows, popups, layer surfaces or
-//! idle inhibitors. They are far above what real apps use; a client over a limit is disconnected.
+//! Per-client bookkeeping, kept in the wl_client user data (wlroots leaves that slot alone):
+//! - privileges: set only on connections the compositor opened itself for a granted program;
+//! - the sandbox flag of clients from the sandbox socket;
+//! - object limits: one client cannot flood the compositor with windows, popups, layer surfaces
+//!   or idle inhibitors. They are far above what real apps use; a client over one is disconnected.
 const std = @import("std");
 const wm = @import("wm.zig");
 const c = wm.c;
+const T = wm.T;
 
 pub const Kind = enum { views, popups, layers, inhibitors };
 
@@ -20,6 +23,8 @@ const limits = std.enums.EnumArray(Kind, Limit).init(.{
 var totals = std.enums.EnumArray(Kind, u32).initFill(0);
 
 pub const State = struct {
+    caps: T.Caps = .{},
+    sandboxed: bool = false,
     count: std.enums.EnumArray(Kind, u16) = .initFill(0),
 };
 
@@ -31,7 +36,7 @@ pub fn get(cl: ?*c.struct_wl_client) ?*State {
     return @ptrCast(@alignCast(c.wl_client_get_user_data(cl)));
 }
 
-fn ensure(cl: ?*c.struct_wl_client) ?*State {
+pub fn ensure(cl: ?*c.struct_wl_client) ?*State {
     if (get(cl)) |st| return st;
     const st = wm.gpa.create(State) catch return null;
     st.* = .{};
@@ -62,6 +67,19 @@ pub fn take(cl: ?*c.struct_wl_client, kind: Kind) ?*State {
 pub fn give(st: *State, kind: Kind) void {
     st.count.getPtr(kind).* -|= 1;
     totals.getPtr(kind).* -|= 1;
+}
+
+/// Sandboxed: flatpak & co (security-context-v1) or a client of the sandbox socket.
+pub fn sandboxed(cl: ?*const c.struct_wl_client) bool {
+    if (c.wlr_security_context_manager_v1_lookup_client(wm.s.security, cl) != null) return true;
+    const st = get(@constCast(cl)) orelse return false;
+    return st.sandboxed;
+}
+
+/// The privileges of a client (none unless RefursWM opened its connection for a grant).
+pub fn caps(cl: ?*const c.struct_wl_client) T.Caps {
+    const st = get(@constCast(cl)) orelse return .{};
+    return st.caps;
 }
 
 /// The client that owns a wlroots object with a `resource` field.

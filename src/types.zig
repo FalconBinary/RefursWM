@@ -18,6 +18,29 @@ pub const Mod = struct {
 /// A command is argv, run directly with posix_spawnp: no shell, no string parsing.
 pub const Cmd = []const [*:0]const u8;
 
+/// Privileged protocols. A client gets one only if RefursWM started it through a matching Grant.
+pub const Caps = packed struct(u8) {
+    /// read the screen: wlr-screencopy, ext-image-copy-capture
+    screencopy: bool = false,
+    /// read and set the clipboard in the background: wlr/ext data-control
+    data_control: bool = false,
+    /// type and move the pointer as the user: virtual keyboard, virtual pointer
+    virtual_input: bool = false,
+    /// change the monitor gamma: wlr-gamma-control
+    gamma: bool = false,
+    _: u4 = 0,
+
+    pub fn any(a: Caps, b: Caps) bool {
+        return @as(u8, @bitCast(a)) & @as(u8, @bitCast(b)) != 0;
+    }
+};
+
+pub const Grant = struct {
+    /// absolute path of the program; started by its path, never looked up in $PATH
+    path: [:0]const u8,
+    caps: Caps,
+};
+
 pub const Action = union(enum) {
     spawn: Cmd,
     close,

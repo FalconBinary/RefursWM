@@ -4,9 +4,13 @@
 // Everything RefursWM uses from C, turned into the Zig module "c" by build.zig (addTranslateC).
 #define WLR_USE_UNSTABLE
 #define _GNU_SOURCE
+#include <fcntl.h>
+#include <sched.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdlib.h>
+#include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,6 +26,7 @@
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
+#include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_ext_data_control_v1.h>
 #include <wlr/types/wlr_ext_image_capture_source_v1.h>
