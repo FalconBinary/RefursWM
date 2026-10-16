@@ -147,6 +147,15 @@ else bad "sandbox socket" "cannot connect"; fi
 if pgrep -P "$WM" -x refurs-launcher >/dev/null; then ok "launcher: running"; else bad launcher "no refurs-launcher child"; fi
 stop privileges
 
+# ---- a program that cannot be started must not take the launcher down with it
+export REFURS_STARTUP="/nonexistent/program"
+start missing
+unset REFURS_STARTUP
+sleep 0.5
+if grep -q "cannot run /nonexistent/program" "$LOG" && pgrep -P "$WM" -x refurs-launcher >/dev/null; then ok "launcher: survives a missing program"
+else bad launcher "after a failed start: $(tail -n 2 "$LOG" | tr '\n' ' ')"; fi
+stop missing
+
 # ---- the compositor is sandboxed, the programs it starts are not
 export REFURS_STARTUP="/usr/bin/sleep 30"
 start sandbox

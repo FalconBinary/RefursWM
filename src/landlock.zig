@@ -58,6 +58,8 @@ pub const Env = struct {
     xdg_config_home: ?[]const u8 = null,
     xdg_runtime_dir: ?[]const u8 = null,
     xcursor_path: ?[]const u8 = null,
+    /// libinput's device quirks, read when libinput starts (built with RefursWM, see deps/libinput.zig)
+    quirks_dir: ?[]const u8 = null,
 
     pub fn fromProcess() Env {
         const get = struct {
@@ -130,6 +132,7 @@ pub fn rules(stage: Stage, env: Env, buf: []u8, out: *[max_rules]Rule) []Rule {
         l.join(env.home, "/.xkb", ro);
         // logind sessions: libelogind reads the machine id
         l.add("/var/lib/dbus", ro);
+        if (env.quirks_dir) |p| l.add(p, ro);
     }
     @memcpy(out[0..l.n], l.rules[0..l.n]);
     return out[0..l.n];

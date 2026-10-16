@@ -243,6 +243,11 @@ fn onSandboxClient(fd: c_int, _: u32, _: ?*anyopaque) callconv(.c) c_int {
 }
 
 pub fn main() u8 {
+    // Zig's stderr (std.debug.print, panic messages) reads the environment once, through a snapshot
+    // of the initial block; setenv/unsetenv here and in the launcher would leave a hole in it. Done
+    // now, before any change, the cached result keeps logging and panic messages working.
+    _ = std.debug.lockStderr(&.{});
+    std.debug.unlockStderr();
     // first of all, while the process holds nothing: drop the terminal, fork the launcher
     var sa = std.mem.zeroes(c.struct_sigaction);
     sa.__sigaction_handler.sa_handler = ignore;
@@ -251,6 +256,9 @@ pub fn main() u8 {
     _ = c.sigaction(c.SIGPIPE, &sa, null);
     sandbox.detachTty();
     launcher.start();
+    // never a nested compositor: an inherited WAYLAND_DISPLAY must not pick wlroots' Wayland backend
+    _ = c.unsetenv("WAYLAND_DISPLAY");
+    _ = c.unsetenv("WAYLAND_SOCKET");
     // the launcher is the only child; the kernel reaps it
     sa = std.mem.zeroes(c.struct_sigaction);
     sa.sa_flags = c.SA_NOCLDWAIT;
@@ -259,6 +267,7 @@ pub fn main() u8 {
     const rt = cfg.realtime and sandbox.realtime();
     sandbox.dropCaps();
     sandbox.noDump();
+    sandbox.bundledQuirks();
     sandbox.early();
 
     c.wlr_log_init(if (c.getenv("REFURS_DEBUG") != null) c.WLR_DEBUG else c.WLR_ERROR, null);

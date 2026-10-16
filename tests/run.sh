@@ -13,7 +13,7 @@ IMG=${IMG:-refurs-dev3}
 mkdir -p "$OUT"
 
 dock() { docker run --rm --cap-add SYS_PTRACE -v "$REPO":/src:ro -v refurs-cache:/cache -v "$OUT":/out -w /src "$IMG" sh -c "$1"; }
-zbuild() { dock "ZIG_GLOBAL_CACHE_DIR=/cache/global zig build --cache-dir /cache/local --prefix /cache/$1 $2"; }
+zbuild() { dock "ZIG_GLOBAL_CACHE_DIR=/cache/global ZIG_LOCAL_PKG_DIR=/cache/pkg zig build --cache-dir /cache/local --prefix /cache/$1 $2"; }
 
 TESTING=/cache/testing/bin/refurswm
 EVIL=/cache/tools/bin/evil
@@ -24,6 +24,7 @@ for step in "$@"; do
 	build)
 		zbuild testing -Dtesting=true
 		zbuild normal ""
+		zbuild system "-Dsystem-libs=true -Dtesting=true"
 		zbuild tools "evil sandbox-test"
 		;;
 	headless)

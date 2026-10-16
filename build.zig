@@ -1,16 +1,24 @@
 // Copyright (c) 2026 Denys (FalconBinary)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! zig build                    - ReleaseSafe (bounds/overflow checks stay on), pure wlroots
+//! zig build                    - ReleaseSafe; wlroots, libinput and libseat built from pinned
+//!                                sources (build.zig.zon) for Wayland only and linked statically
+//! zig build -Dsystem-libs=true - the distribution's shared wlroots/libinput/libseat instead
 //! zig build test               - unit tests (pure Zig, run on any host)
 //! zig build evil               - hostile test client for tests/security.sh (Linux)
 //! zig build sandbox-test       - the compositor's sandbox applied to a test program (Linux)
-//! zig build --prefix ~/.local  - install to ~/.local/bin/refurswm
+//! zig build --prefix ~/.local  - install to ~/.local/bin/refurswm (+ share/refurswm/libinput)
 const std = @import("std");
+const common = @import("deps/common.zig");
+const wlroots = @import("deps/wlroots.zig");
+const libinput = @import("deps/libinput.zig");
+const libseat = @import("deps/libseat.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(std.builtin.Optimize, "optimize", "build mode (default safe = ReleaseSafe)") orelse .safe;
+    const system_libs = b.option(bool, "system-libs", "use the distribution's shared wlroots, libinput and libseat") orelse false;
+    const ubsan = b.option(bool, "c-ubsan", "UBSan (trap) in the C dependencies, for debugging") orelse false;
 
     const tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
@@ -19,26 +27,14 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("test", "unit tests").dependOn(&b.addRunArtifact(tests).step);
 
-    // everything below links Linux libraries found through pkg-config
+    // everything below links Linux libraries
     if (target.result.os.tag != .linux) return;
 
     const opts = b.addOptions();
-    // test builds only: screencopy + virtual input on regardless of the config (grim/wtype in CI)
-    opts.addOption(bool, "testing", b.option(bool, "testing", "enable screencopy and virtual input for tests") orelse false);
-
-    const wlr = "wlroots-0.20";
-
-    // wlr_layer_shell_v1.h includes this generated server header
-    const layer_h = scan(b, "server-header", b.path("protocol/wlr-layer-shell-unstable-v1.xml"), "wlr-layer-shell-unstable-v1-protocol.h");
+    // test builds only: privileged protocols for every unsandboxed client (grim/wtype in CI)
+    opts.addOption(bool, "testing", b.option(bool, "testing", "privileged protocols for all unsandboxed clients (tests)") orelse false);
 
     const tc = b.addTranslateC(.{ .root_source_file = b.path("src/c.h"), .target = target, .optimize = optimize });
-    tc.addIncludePath(layer_h.dirname());
-    // translate-c needs the same -I as a C compiler; take them from pkg-config
-    var pc: std.ArrayList([]const u8) = .empty;
-    pc.appendSlice(b.allocator, &.{ "pkg-config", "--cflags-only-I", wlr, "wayland-server", "xkbcommon", "libinput", "pixman-1" }) catch @panic("oom");
-    var it = std.mem.tokenizeAny(u8, b.run(pc.items), " \n");
-    while (it.next()) |flag| if (std.mem.startsWith(u8, flag, "-I")) tc.addIncludePath(.{ .cwd_relative = flag[2..] });
-
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -47,16 +43,42 @@ pub fn build(b: *std.Build) void {
         .single_threaded = true,
         .pic = true,
         .strip = optimize != .debug,
+        .stack_protector = true,
     });
+    for ([_][]const u8{ "wayland-server", "xkbcommon" }) |lib| mod.linkSystemLibrary(lib, .{});
+
+    if (system_libs) {
+        // wlr_layer_shell_v1.h includes this generated server header
+        const layer_h = common.scan(b, "server-header", .{ .file = b.path("protocol/wlr-layer-shell-unstable-v1.xml") }, "wlr-layer-shell-unstable-v1-protocol.h");
+        tc.addIncludePath(layer_h.dirname());
+        common.pkgIncludes(b, &.{ "wlroots-0.20", "wayland-server", "xkbcommon", "libinput", "pixman-1" }, null, tc);
+        for ([_][]const u8{ "wlroots-0.20", "libinput" }) |lib| mod.linkSystemLibrary(lib, .{});
+        opts.addOption(bool, "bundled_quirks", false);
+    } else {
+        const wlr_dep = b.lazyDependency("wlroots", .{}) orelse return;
+        const li_dep = b.lazyDependency("libinput", .{}) orelse return;
+        const seat_dep = b.lazyDependency("seatd", .{}) orelse return;
+        const co: common.Options = .{ .target = target, .optimize = optimize, .ubsan = ubsan };
+        const li = libinput.build(b, li_dep, co);
+        const seat = libseat.build(b, seat_dep, co);
+        const wlr = wlroots.build(b, wlr_dep, co, libinput.include(li_dep), libseat.include(seat_dep), b.path("deps/wlr_nested_stub.c"));
+        libinput.installQuirks(b, li_dep);
+        for ([_]std.Build.LazyPath{ wlr.gen, wlr.include, libinput.include(li_dep), libseat.include(seat_dep) }) |p| tc.addIncludePath(p);
+        common.pkgIncludes(b, &.{ "wayland-server", "xkbcommon", "pixman-1", "libdrm" }, null, tc);
+        mod.linkLibrary(wlr.lib);
+        mod.linkLibrary(li);
+        mod.linkLibrary(seat);
+        opts.addOption(bool, "bundled_quirks", true);
+    }
     mod.addImport("c", tc.createModule());
     mod.addOptions("build_options", opts);
-    for ([_][]const u8{ wlr, "wayland-server", "xkbcommon", "libinput" }) |lib| mod.linkSystemLibrary(lib, .{});
 
     const exe = b.addExecutable(.{ .name = "refurswm", .root_module = mod });
-    // hardened binary: PIE + full RELRO + immediate binding
+    // hardened binary: PIE + full RELRO + immediate binding; unused code of the static libraries goes
     exe.pie = true;
     exe.link_z_relro = true;
     exe.link_z_lazy = false;
+    exe.link_gc_sections = true;
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -77,36 +99,15 @@ pub fn build(b: *std.Build) void {
     b.step("sandbox-test", "build the sandbox test program").dependOn(&b.addInstallArtifact(st, .{}).step);
 }
 
-/// A protocol XML: a file in this repo or a path inside the wayland-protocols data dir.
-const Xml = union(enum) { repo: std.Build.LazyPath, system: []const u8 };
-
-/// Runs wayland-scanner. System XMLs are looked up through pkg-config when the step runs, so builds
-/// that never need them do not need the wayland-protocols package either.
-fn scanXml(b: *std.Build, kind: []const u8, xml: Xml, out: []const u8) std.Build.LazyPath {
-    switch (xml) {
-        .repo => |p| return scan(b, kind, p, out),
-        .system => |rel| {
-            const r = b.addSystemCommand(&.{ "sh", "-c", "exec wayland-scanner \"$1\" \"$(pkg-config --variable=pkgdatadir wayland-protocols)/$2\" \"$3\"", "sh", kind, rel });
-            return r.addOutputFileArg(out);
-        },
-    }
-}
-
-fn scan(b: *std.Build, kind: []const u8, xml: std.Build.LazyPath, out: []const u8) std.Build.LazyPath {
-    const r = b.addSystemCommand(&.{ "wayland-scanner", kind });
-    r.addFileArg(xml);
-    return r.addOutputFileArg(out);
-}
-
 /// tests/evil: a hostile Wayland client used by tests/security.sh and tests/bench.sh.
 fn evil(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-    const protos = [_]struct { name: []const u8, xml: Xml }{
+    const protos = [_]struct { name: []const u8, xml: common.Xml }{
         .{ .name = "xdg-shell", .xml = .{ .system = "stable/xdg-shell/xdg-shell.xml" } },
         .{ .name = "xdg-activation-v1", .xml = .{ .system = "staging/xdg-activation/xdg-activation-v1.xml" } },
         .{ .name = "idle-inhibit-unstable-v1", .xml = .{ .system = "unstable/idle-inhibit/idle-inhibit-unstable-v1.xml" } },
-        .{ .name = "wlr-layer-shell-unstable-v1", .xml = .{ .repo = b.path("protocol/wlr-layer-shell-unstable-v1.xml") } },
-        .{ .name = "virtual-keyboard-unstable-v1", .xml = .{ .repo = b.path("tests/evil/protocol/virtual-keyboard-unstable-v1.xml") } },
-        .{ .name = "wlr-virtual-pointer-unstable-v1", .xml = .{ .repo = b.path("tests/evil/protocol/wlr-virtual-pointer-unstable-v1.xml") } },
+        .{ .name = "wlr-layer-shell-unstable-v1", .xml = .{ .file = b.path("protocol/wlr-layer-shell-unstable-v1.xml") } },
+        .{ .name = "virtual-keyboard-unstable-v1", .xml = .{ .file = b.path("tests/evil/protocol/virtual-keyboard-unstable-v1.xml") } },
+        .{ .name = "wlr-virtual-pointer-unstable-v1", .xml = .{ .file = b.path("tests/evil/protocol/wlr-virtual-pointer-unstable-v1.xml") } },
     };
     const tc = b.addTranslateC(.{ .root_source_file = b.path("tests/evil/c.h"), .target = target, .optimize = optimize });
     const mod = b.createModule(.{
@@ -116,9 +117,9 @@ fn evil(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.O
         .link_libc = true,
     });
     for (protos) |p| {
-        const h = scanXml(b, "client-header", p.xml, b.fmt("{s}-client-protocol.h", .{p.name}));
+        const h = common.scan(b, "client-header", p.xml, b.fmt("{s}-client-protocol.h", .{p.name}));
         tc.addIncludePath(h.dirname());
-        mod.addCSourceFile(.{ .file = scanXml(b, "private-code", p.xml, b.fmt("{s}-protocol.c", .{p.name})) });
+        mod.addCSourceFile(.{ .file = common.scan(b, "private-code", p.xml, b.fmt("{s}-protocol.c", .{p.name})) });
     }
     mod.addImport("c", tc.createModule());
     mod.linkSystemLibrary("wayland-client", .{});

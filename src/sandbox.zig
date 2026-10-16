@@ -64,6 +64,27 @@ pub fn realtime() bool {
     return c.sched_setscheduler(0, c.SCHED_RR | c.SCHED_RESET_ON_FORK, &p) == 0;
 }
 
+// ------------------------------------------------------------------ libinput quirks
+
+var quirks_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+var quirks_dir: ?[]const u8 = null;
+
+/// libinput's device quirks of the same version as the libinput built into RefursWM live next to the
+/// binary (<prefix>/share/refurswm/libinput): libinput is pointed there (LIBINPUT_QUIRKS_DIR, the
+/// user's own setting wins) and the startup Landlock domain may read them.
+pub fn bundledQuirks() void {
+    if (!@import("build_options").bundled_quirks or c.getenv("LIBINPUT_QUIRKS_DIR") != null) return;
+    var exe: [std.fs.max_path_bytes]u8 = undefined;
+    const n = c.readlink("/proc/self/exe", &exe, exe.len);
+    if (n <= 0 or n >= exe.len) return;
+    const bin = std.fs.path.dirname(exe[0..@intCast(n)]) orelse return;
+    const prefix = std.fs.path.dirname(bin) orelse return;
+    const p = std.fmt.bufPrintSentinel(&quirks_buf, "{s}/share/refurswm/libinput", .{prefix}, 0) catch return;
+    if (c.access(p.ptr, c.R_OK) != 0) return;
+    _ = c.setenv("LIBINPUT_QUIRKS_DIR", p.ptr, 1);
+    quirks_dir = p;
+}
+
 // ------------------------------------------------------------------ sandbox
 
 /// REFURS_SANDBOX=0 turns it off, to tell a sandbox denial from a bug on new hardware.
@@ -79,7 +100,9 @@ var landlock_abi: u32 = 0;
 pub fn early() void {
     if (!enabled()) return;
     if (linux.errno(linux.prctl(@intFromEnum(linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0)) != .SUCCESS) return;
-    landlock_abi = landlock.apply(.startup, landlock.Env.fromProcess());
+    var env = landlock.Env.fromProcess();
+    env.quirks_dir = quirks_dir;
+    landlock_abi = landlock.apply(.startup, env);
 }
 
 const SockFprog = extern struct { len: u16, filter: [*]const seccomp.Insn };
