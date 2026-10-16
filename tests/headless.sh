@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright (c) 2026 Denys (FalconBinary)
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Headless smoke test (pixman renderer, no GPU): start RefursWM, open terminals, press keys
 # through wtype, take screenshots with grim. Needs a build with -Dtesting=true.
 # usage: tests/headless.sh BIN OUTDIR

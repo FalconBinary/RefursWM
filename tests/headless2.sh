@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright (c) 2026 Denys (FalconBinary)
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Second headless round: layer shell (swaybg, fuzzel), focus-follows-mouse (wlrctl virtual
 # pointer), idle CPU cost, session lock incl. a crashed locker. Needs -Dtesting=true.
 # usage: tests/headless2.sh BIN OUTDIR

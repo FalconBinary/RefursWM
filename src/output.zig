@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Monitors, layer-shell surfaces (bars, launchers, wallpapers) and ext-session-lock.
 //! A monitor draws only when wlr_scene has damage for it: no damage, no frame, no GPU work.
 const std = @import("std");

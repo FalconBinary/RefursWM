@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Compositor state and the window-management core: focus, workspaces, arranging, actions.
 //! Single-threaded and purely event-driven: nothing runs unless a client or an input device
 //! sends something, so an idle desktop costs zero wakeups. wlr_scene does damage tracking and

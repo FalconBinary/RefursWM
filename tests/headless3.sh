@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright (c) 2026 Denys (FalconBinary)
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Third headless round: floating, move to workspace, toggle split, scroll columns, Super+drag swap.
 # usage: tests/headless3.sh BIN OUTDIR
 set -u

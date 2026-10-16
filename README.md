@@ -110,3 +110,13 @@ xdg-shell, layer-shell (панели, обои, лаунчеры), xdg-decoratio
 Не проверено на реальном железе: DRM/KMS, libinput-тачпад, несколько мониторов, сборка `-Dfx=true` (компилируется; рисовать её в контейнере без GPU нельзя).
 
 Не реализовано: Xwayland (намеренно), pointer-constraints (захват мыши в играх), планшеты и тач-экраны, индикатор рабочих столов для netline (netline говорит с IPC MangoWM, у RefursWM IPC нет).
+
+## Лицензия
+
+Copyright (c) 2026 Denys ([FalconBinary](https://github.com/FalconBinary))
+
+RefursWM — свободная программа: её можно распространять и изменять на условиях GNU General Public License версии 3 или (на ваш выбор) любой более поздней версии. Полный текст — в файле [LICENSE](LICENSE).
+
+Программа распространяется «как есть», без каких-либо гарантий, в том числе гарантии пригодности для конкретной цели.
+
+Протокол `protocol/wlr-layer-shell-unstable-v1.xml` — © 2017 Drew DeVault, под своей лицензией (указана в самом файле).

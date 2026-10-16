@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Keyboards, pointer, seat requests.
 //! Keybindings match the key's symbol in the first layout without modifiers, so Super+Q works
 //! the same with "us" or "ru" active and Shift-bindings use the unshifted key name.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Types the config is written in. Kept apart from config.zig so the config stays short.
 const layout = @import("layout.zig");
 

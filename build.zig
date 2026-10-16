@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! zig build                    - ReleaseSafe (bounds/overflow checks stay on), pure wlroots
 //! zig build -Dfx=true          - + scenefx: rounded corners (GLES2 renderer)
 //! zig build test               - layout unit tests (run on any host)

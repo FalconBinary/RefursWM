@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Everything RefursWM uses from C, turned into the Zig module "c" by build.zig (addTranslateC).
 #define WLR_USE_UNSTABLE
 #define _GNU_SOURCE

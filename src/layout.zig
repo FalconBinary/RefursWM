@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Pure layout logic: no Wayland here, so it is unit-tested on any host (`zig build test`).
 //! Two layouts per workspace, switchable at runtime:
 //!   dwindle - Hyprland-style binary tree: a new window splits the focused one along its longer side

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! xdg-shell toplevels and popups.
 //! A view's scene tree sits at the window-geometry origin: borders are plain rects around it
 //! (one rounded rect with -Dfx), the client surfaces are a subsurface tree clipped to the slot,

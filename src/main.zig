@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Denys (FalconBinary)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! RefursWM - a tiling + scrolling Wayland compositor on wlroots.
 //! No Xwayland, no IPC socket, no config parser, no timers: the only code that runs is the
 //! answer to a client request or an input event.
