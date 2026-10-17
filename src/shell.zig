@@ -92,17 +92,6 @@ const layouts = blk: {
     break :blk out;
 };
 
-fn rgba32(comptime col: T.Color) u32 {
-    var v: u32 = 0;
-    for (col) |ch| v = (v << 8) | @as(u32, @intFromFloat(@round(std.math.clamp(ch, 0, 1) * 255)));
-    return v;
-}
-
-const colors = struct {
-    const dark = [3]u32{ rgba32(cfg.dark.active), rgba32(cfg.dark.inactive), rgba32(cfg.dark.background) };
-    const light = [3]u32{ rgba32(cfg.light.active), rgba32(cfg.light.inactive), rgba32(cfg.light.background) };
-};
-
 // ------------------------------------------------------------------ state
 
 fn group() u32 {
@@ -127,8 +116,7 @@ fn snapshot(st: *State) void {
 }
 
 fn sendTheme(res: *c.struct_wl_resource, theme: T.Theme) void {
-    const p = if (theme == .dark) colors.dark else colors.light;
-    c.zrefurs_shell_v1_send_theme(res, @intFromBool(theme == .dark), p[0], p[1], p[2]);
+    c.zrefurs_shell_v1_send_theme(res, @intFromBool(theme == .dark));
 }
 
 fn sendLayout(res: *c.struct_wl_resource, g: u32) void {

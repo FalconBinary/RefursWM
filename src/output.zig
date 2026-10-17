@@ -170,7 +170,7 @@ pub fn onNewOutput(data: ?*anyopaque) void {
     c.wlr_scene_output_layout_add_output(s.scene_layout, lo, so);
 
     const black = [4]f32{ 0, 0, 0, 1 };
-    const bg = c.wlr_scene_rect_create(s.layers.color, 0, 0, &wm.premul(wm.palette().background)) orelse return;
+    const bg = c.wlr_scene_rect_create(s.layers.color, 0, 0, &wm.palette().background) orelse return;
     const lock_bg = c.wlr_scene_rect_create(s.layers.lock_bg, 0, 0, &black) orelse return;
     const o = wm.gpa.create(Output) catch return;
     o.* = .{ .wlr = wo, .so = so, .bg = bg, .lock_bg = lock_bg, .ws = ws };

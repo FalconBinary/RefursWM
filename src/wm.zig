@@ -26,14 +26,7 @@ pub const Box = L.Box;
 
 // a wrong config value is a compile error, not a surprise after login
 comptime {
-    const bad = struct {
-        fn frac(x: f32) bool {
-            return !(x >= 0 and x <= 1);
-        }
-    };
-    if (bad.frac(cfg.active_opacity) or bad.frac(cfg.inactive_opacity)) @compileError("config: opacity must be within 0..1");
     for (cfg.rules) |r| {
-        if (r.opacity) |o| if (bad.frac(o)) @compileError("config: rule opacity must be within 0..1");
         if (r.workspace) |n| if (n < 1 or n > WS) @compileError("config: rule workspace must be 1..9");
     }
     if (cfg.border < 0 or cfg.border > 64) @compileError("config: border must be 0..64");
@@ -233,11 +226,6 @@ pub fn wbox(b: Box) c.struct_wlr_box {
 
 pub fn palette() T.Palette {
     return if (s.theme == .dark) cfg.dark else cfg.light;
-}
-
-/// wlr_scene colours are premultiplied
-pub fn premul(col: T.Color) [4]f32 {
-    return .{ col[0] * col[3], col[1] * col[3], col[2] * col[3], col[3] };
 }
 
 // ------------------------------------------------------------------ focus
@@ -446,7 +434,6 @@ pub fn setFullscreen(v: *View, on_: bool) void {
     _ = c.wlr_xdg_toplevel_set_fullscreen(v.xdg, on_);
     c.wlr_scene_node_reparent(&v.tree.node, if (on_) s.layers.fullscreen else if (v.floating) s.layers.floating else s.layers.tiled);
     v.recolor();
-    v.effects();
     arrange(v.ws, null);
 }
 
@@ -602,7 +589,7 @@ pub fn toggleTheme() void {
     s.theme = if (s.theme == .dark) .light else .dark;
     shell.touch();
     for (s.views.items) |v| v.recolor();
-    for (s.outputs.items) |o| c.wlr_scene_rect_set_color(o.bg, &premul(palette().background));
+    for (s.outputs.items) |o| c.wlr_scene_rect_set_color(o.bg, &palette().background);
     themeHooks();
 }
 

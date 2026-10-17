@@ -6,22 +6,27 @@
 //! Ошибка в конфиге = ошибка компиляции, а не сюрприз после входа в сессию.
 const t = @import("types.zig");
 const Mod = t.Mod;
-const rgba = t.rgba;
+const hex = t.hex;
 
 // ------------------------------------------------------------------ вид
 
 /// Тема при запуске; переключается хоткеем (toggle_theme).
 pub const theme: t.Theme = .dark;
 
+/// Цвета RefursWM: "#RRGGBB", только непрозрачные. Бар RefursLine их не берёт — у него свои
+/// палитры в его config.zig, это две независимые настройки.
+///   active     — рамка окна в фокусе
+///   inactive   — рамка остальных окон
+///   background — фон рабочего стола (виден, пока нет обоев)
 pub const dark = t.Palette{
-    .active = rgba(0x89b4faff),
-    .inactive = rgba(0x45475aff),
-    .background = rgba(0x1e1e2eff),
+    .active = hex("#89b4fa"),
+    .inactive = hex("#45475a"),
+    .background = hex("#1e1e2e"),
 };
 pub const light = t.Palette{
-    .active = rgba(0x1e66f5ff),
-    .inactive = rgba(0xbcc0ccff),
-    .background = rgba(0xeff1f5ff),
+    .active = hex("#1e66f5"),
+    .inactive = hex("#bcc0cc"),
+    .background = hex("#eff1f5"),
 };
 
 /// Команды при смене темы — чтобы GTK/Qt/порталы тоже стали тёмными/светлыми.
@@ -38,11 +43,6 @@ pub const border: i32 = 2;
 /// Зазор между окнами и от краёв экрана.
 pub const gaps_in: i32 = 6;
 pub const gaps_out: i32 = 10;
-
-/// Прозрачность активного/неактивного окна (1.0 = непрозрачно).
-/// Совет по скорости: 1.0 оставляет возможность direct scanout (кадр идёт на экран без композитинга).
-pub const active_opacity: f32 = 1.0;
-pub const inactive_opacity: f32 = 1.0;
 
 /// Принудительно рисовать рамки самому (SSD), чтобы приложения не рисовали свои заголовки.
 pub const server_side_decorations = true;
@@ -94,7 +94,6 @@ pub const rules = [_]t.Rule{
     .{ .app_id = "pavucontrol", .float = true },
     .{ .app_id = "nm-connection-editor", .float = true },
     // .{ .app_id = "firefox", .workspace = 2 },
-    // .{ .app_id = "foot", .opacity = 0.92 },
 };
 
 // ------------------------------------------------------------------ безопасность

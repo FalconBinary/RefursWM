@@ -78,14 +78,11 @@
     </event>
 
     <event name="theme">
-      <description summary="colour scheme">
-        dark: 1 for the dark palette. Colours are 0xRRGGBBAA: the active and inactive window
-        border and the desktop background.
+      <description summary="dark or light">
+        dark: 1 for the dark scheme. Only the scheme is shared: RefursWM and the bar each have
+        their own colours.
       </description>
       <arg name="dark" type="uint"/>
-      <arg name="active" type="uint"/>
-      <arg name="inactive" type="uint"/>
-      <arg name="background" type="uint"/>
     </event>
 
     <event name="open">

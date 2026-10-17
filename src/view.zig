@@ -35,13 +35,10 @@ pub const View = struct {
     active: bool = false,
     ruled: bool = false,
     enabled: bool = false,
-    opacity: ?f32 = null,
     /// outer box (border included), layout coordinates
     box: Box = .{},
     sent_w: i32 = 0,
     sent_h: i32 = 0,
-    /// what effects() last applied, so the common case (opaque) costs nothing per commit
-    cur_opacity: f32 = 1.0,
     last_geo: Box = .{},
 
     l_map: Listener = zero,
@@ -128,7 +125,7 @@ pub const View = struct {
 
     pub fn recolor(v: *View) void {
         const p = wm.palette();
-        const col = wm.premul(if (v.active) p.active else p.inactive);
+        const col = if (v.active) p.active else p.inactive;
         for (v.rects) |r| c.wlr_scene_rect_set_color(r, &col);
     }
 
@@ -139,19 +136,6 @@ pub const View = struct {
         v.active = on;
         _ = c.wlr_xdg_toplevel_set_activated(v.xdg, on);
         v.recolor();
-        v.effects();
-    }
-
-    /// Opacity on the window's buffers. Re-applied per commit while not 1.0 (new subsurfaces).
-    pub fn effects(v: *View) void {
-        const op: f32 = if (v.fullscreen) 1.0 else v.opacity orelse if (v.active) cfg.active_opacity else cfg.inactive_opacity;
-        if (op == 1.0 and v.cur_opacity == 1.0) return;
-        v.cur_opacity = op;
-        c.wlr_scene_node_for_each_buffer(&v.content.node, eachBuffer, v);
-    }
-
-    fn eachBuffer(buf: [*c]c.struct_wlr_scene_buffer, _: c_int, _: c_int, data: ?*anyopaque) callconv(.c) void {
-        c.wlr_scene_buffer_set_opacity(buf, wm.ptr(View, data).cur_opacity);
     }
 
     // ------------------------------------------------------------ lifecycle
@@ -172,7 +156,6 @@ pub const View = struct {
                 if (r.workspace) |n| if (n >= 1 and n <= wm.WS) {
                     v.ws = n - 1;
                 };
-                if (r.opacity) |o| v.opacity = o;
             }
         }
         if (v.floating) c.wlr_scene_node_reparent(&v.tree.node, s.layers.floating);
@@ -211,7 +194,6 @@ pub const View = struct {
             }
             v.place();
         }
-        v.effects();
     }
 
     fn onMap(v: *View, _: ?*anyopaque) void {

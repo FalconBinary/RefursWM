@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Types the config is written in. Kept apart from config.zig so the config stays short.
+const std = @import("std");
 const layout = @import("layout.zig");
 
 pub const Dir = layout.Dir;
@@ -83,15 +84,22 @@ pub const Bind = struct {
     action: Action,
 };
 
+/// Always opaque: alpha is 1.
 pub const Color = [4]f32;
 
-pub fn rgba(comptime v: u32) Color {
-    return .{
-        @as(f32, @floatFromInt((v >> 24) & 0xff)) / 255.0,
-        @as(f32, @floatFromInt((v >> 16) & 0xff)) / 255.0,
-        @as(f32, @floatFromInt((v >> 8) & 0xff)) / 255.0,
-        @as(f32, @floatFromInt(v & 0xff)) / 255.0,
-    };
+/// "#RRGGBB" checked at compile time: a typo in config.zig is a build error. No alpha on purpose.
+pub fn hex(comptime s: []const u8) Color {
+    comptime {
+        const h = if (s.len > 0 and s[0] == '#') s[1..] else s;
+        if (h.len != 6) @compileError("config: colour must be #RRGGBB: " ++ s);
+        const v = std.fmt.parseInt(u24, h, 16) catch @compileError("config: bad colour: " ++ s);
+        return .{
+            @as(f32, @floatFromInt((v >> 16) & 0xff)) / 255.0,
+            @as(f32, @floatFromInt((v >> 8) & 0xff)) / 255.0,
+            @as(f32, @floatFromInt(v & 0xff)) / 255.0,
+            1.0,
+        };
+    }
 }
 
 pub const Palette = struct {
@@ -109,7 +117,6 @@ pub const Rule = struct {
     float: ?bool = null,
     /// 1..9
     workspace: ?u8 = null,
-    opacity: ?f32 = null,
 };
 
 pub const OutputCfg = struct {
