@@ -10,6 +10,7 @@ const cfg = wm.cfg;
 const Box = wm.Box;
 const Listener = wm.Listener;
 const client = @import("client.zig");
+const shell = @import("shell.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -67,6 +68,7 @@ pub const Output = struct {
         wm.off(&o.l_frame);
         wm.off(&o.l_request_state);
         wm.off(&o.l_destroy);
+        shell.outputGone(o.wlr);
         if (o.lock_surf) |l| l.output = null;
         if (o.lock_wait) o.stopLockWait();
         // layer surfaces die with their monitor (their destroy handlers unlink them)
@@ -180,6 +182,7 @@ pub fn onNewOutput(data: ?*anyopaque) void {
     wm.on(&wo.events.request_state, &o.l_request_state, wm.cb(Output, "l_request_state", Output.onRequestState));
     wm.on(&wo.events.destroy, &o.l_destroy, wm.cb(Output, "l_destroy", Output.onDestroy));
     updateGeometry(o);
+    shell.touch();
     if (s.lock_pending) o.startLockWait();
     wm.log("output {s}: {d}x{d} workspace {d}", .{ name, o.full.w, o.full.h, ws + 1 });
 }

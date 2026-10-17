@@ -126,7 +126,7 @@ stop inhibit
 
 # ---- normal build: privileged protocols only for programs RefursWM starts with a grant
 BIN=$NORMAL
-PRIV="zwlr_screencopy_manager_v1|ext_image_copy_capture_manager_v1|zwlr_data_control_manager_v1|ext_data_control_manager_v1|zwp_virtual_keyboard_manager_v1|zwlr_virtual_pointer_manager_v1|zwlr_gamma_control_manager_v1"
+PRIV="zrefurs_shell_v1|zwlr_screencopy_manager_v1|ext_image_copy_capture_manager_v1|zwlr_data_control_manager_v1|ext_data_control_manager_v1|zwp_virtual_keyboard_manager_v1|zwlr_virtual_pointer_manager_v1|zwlr_gamma_control_manager_v1"
 export REFURS_STARTUP="/usr/bin/grim $OUT/granted.png"
 rm -f "$OUT/granted.png" "$OUT/shell.png"
 start privileges

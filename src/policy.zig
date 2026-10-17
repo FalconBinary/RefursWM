@@ -57,7 +57,46 @@ pub fn validToken(t: []const u8) bool {
     return true;
 }
 
+/// A string a client controls (window title, app id) made safe for another client to draw:
+/// valid UTF-8 only, no control characters (C0, DEL, C1), cut at a character boundary to fit
+/// `out`. Returns the length written.
+pub fn cleanText(out: []u8, src: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < src.len) {
+        const k = std.unicode.utf8ByteSequenceLength(src[i]) catch {
+            i += 1;
+            continue;
+        };
+        if (i + k > src.len) break;
+        const ch = src[i..][0..k];
+        const cp = std.unicode.utf8Decode(ch) catch {
+            i += 1;
+            continue;
+        };
+        i += k;
+        if (cp < 0x20 or (cp >= 0x7f and cp < 0xa0)) continue;
+        if (n + k > out.len) break;
+        @memcpy(out[n..][0..k], ch);
+        n += k;
+    }
+    return n;
+}
+
 const tt = std.testing;
+
+test "client strings for the bar: valid UTF-8, no control characters, bounded" {
+    var buf: [255]u8 = undefined;
+    var n = cleanText(&buf, "a\x1b[31mb\xffc\xc2\x85d\xc3\xa9\xed\xa0\x80");
+    try tt.expectEqualStrings("a[31mbcd\xc3\xa9", buf[0..n]);
+    var long: [600]u8 = @splat('x');
+    long[254] = 0xc3;
+    long[255] = 0xa9;
+    n = cleanText(&buf, &long);
+    try tt.expectEqual(@as(usize, 254), n);
+    try tt.expect(std.unicode.utf8ValidateSlice(buf[0..n]));
+    try tt.expectEqual(@as(usize, 0), cleanText(&buf, ""));
+}
 
 test "display names and tokens are validated before they reach an environment" {
     try tt.expect(validDisplayName("wayland-0"));

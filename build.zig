@@ -46,6 +46,10 @@ pub fn build(b: *std.Build) void {
         .stack_protector = true,
     });
     for ([_][]const u8{ "wayland-server", "xkbcommon" }) |lib| mod.linkSystemLibrary(lib, .{});
+    // refurs-shell, the bar's protocol (src/shell.zig)
+    const shell_xml: common.Xml = .{ .file = b.path("protocol/refurs-shell-unstable-v1.xml") };
+    tc.addIncludePath(common.scan(b, "server-header", shell_xml, "refurs-shell-unstable-v1-protocol.h").dirname());
+    mod.addCSourceFile(.{ .file = common.scan(b, "private-code", shell_xml, "refurs-shell-unstable-v1-protocol.c") });
 
     if (system_libs) {
         // wlr_layer_shell_v1.h includes this generated server header

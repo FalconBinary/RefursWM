@@ -28,7 +28,10 @@ pub const Caps = packed struct(u8) {
     virtual_input: bool = false,
     /// change the monitor gamma: wlr-gamma-control
     gamma: bool = false,
-    _: u4 = 0,
+    /// the bar: workspaces, focused window, layout and theme; switching workspaces, lock, quit
+    /// (refurs-shell, protocol/refurs-shell-unstable-v1.xml)
+    shell: bool = false,
+    _: u3 = 0,
 
     pub fn any(a: Caps, b: Caps) bool {
         return @as(u8, @bitCast(a)) & @as(u8, @bitCast(b)) != 0;
@@ -66,7 +69,12 @@ pub const Action = union(enum) {
     column_expel,
     /// dark <-> light: border/background colours + `theme_hooks`
     toggle_theme,
+    /// a menu of the bar (RefursLine): the bar opens it, nothing happens without a bar
+    bar: Menu,
 };
+
+/// Bar menus, same values as zrefurs_shell_v1.menu.
+pub const Menu = enum(u32) { run, commands, wifi, bluetooth, wallpaper, power, calendar };
 
 pub const Bind = struct {
     mods: u32,

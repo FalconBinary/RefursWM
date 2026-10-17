@@ -109,7 +109,10 @@ pub const rules = [_]t.Rule{
 ///   .data_control  — история буфера (wl-paste --watch cliphist store)
 ///   .virtual_input — wayvnc, wtype
 ///   .gamma         — wlsunset, gammastep
+///   .shell         — бар RefursLine: рабочие столы, заголовок окна, раскладка, тема; переключение
+///                    столов, блокировка, выход (протокол refurs-shell)
 pub const grants = [_]t.Grant{
+    .{ .path = bar, .caps = .{ .shell = true } },
     .{ .path = "/usr/bin/grim", .caps = .{ .screencopy = true } },
     // .{ .path = "/usr/bin/wl-paste", .caps = .{ .data_control = true } },
     // .{ .path = "/usr/bin/wayvnc", .caps = .{ .screencopy = true, .virtual_input = true } },
@@ -127,8 +130,12 @@ pub const realtime = true;
 
 // ------------------------------------------------------------------ автозапуск
 
+/// Бар RefursLine (github.com/FalconBinary/RefursLine). Абсолютный путь: grant выше выдаётся
+/// только по нему. Нет бара — в логе строка «cannot run», хоткеи меню ничего не делают.
+pub const bar = "/usr/local/bin/refursline";
+
 pub const autostart = [_]t.Cmd{
-    // &.{"netline"},
+    &.{bar},
     // &.{ "swaybg", "-i", "/home/user/wall.png" },
     // &.{ "swayidle", "-w", "timeout", "600", "swaylock" },
 };
@@ -142,11 +149,20 @@ const SS = mod | Mod.shift;
 const SC = mod | Mod.ctrl;
 
 pub const terminal: t.Cmd = &.{"foot"};
-pub const launcher: t.Cmd = &.{"fuzzel"};
+// без бара: лаунчер fuzzel — .{ .mods = S, .key = "d", .action = .{ .spawn = &.{"fuzzel"} } }
 
 pub const binds = [_]t.Bind{
     .{ .mods = S, .key = "Return", .action = .{ .spawn = terminal } },
-    .{ .mods = S, .key = "d", .action = .{ .spawn = launcher } },
+    // меню бара RefursLine
+    .{ .mods = S, .key = "d", .action = .{ .bar = .run } },
+    .{ .mods = SS, .key = "d", .action = .{ .bar = .commands } },
+    .{ .mods = S, .key = "n", .action = .{ .bar = .wifi } },
+    .{ .mods = S, .key = "b", .action = .{ .bar = .bluetooth } },
+    .{ .mods = S, .key = "p", .action = .{ .bar = .wallpaper } },
+    .{ .mods = S, .key = "c", .action = .{ .bar = .calendar } },
+    .{ .mods = S, .key = "Escape", .action = .{ .bar = .power } },
+    // перезапустить бар, если он упал (второй экземпляр сам выходит)
+    .{ .mods = SS, .key = "b", .action = .{ .spawn = &.{bar} } },
     // снимок экрана в $XDG_PICTURES_DIR (grim из списка grants)
     .{ .mods = 0, .key = "Print", .action = .{ .spawn = &.{"/usr/bin/grim"} } },
     .{ .mods = S, .key = "q", .action = .close },

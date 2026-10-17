@@ -15,6 +15,7 @@ const client = @import("client.zig");
 const launcher = @import("launcher.zig");
 const policy = @import("policy.zig");
 const sandbox = @import("sandbox.zig");
+const shell = @import("shell.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(wm.Listener);
 
@@ -185,6 +186,7 @@ fn setup() !void {
         wm.on(&vp.*.events.new_virtual_pointer, &l_vptr, wm.gcb(input.onVirtualPointer));
         restrict(vp.*.global, cls);
     }
+    if (granted.shell or all) restrict(shell.create(dsp), .{ .privileged = .{ .shell = true } });
     if (granted.gamma or all) {
         const g = c.wlr_gamma_control_manager_v1_create(dsp) orelse return error.Gamma;
         c.wlr_scene_set_gamma_control_manager_v1(s.scene, g);

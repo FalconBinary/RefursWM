@@ -12,6 +12,7 @@ const View = wm.View;
 const Listener = wm.Listener;
 const outmod = @import("output.zig");
 const policy = @import("policy.zig");
+const shell = @import("shell.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -62,6 +63,7 @@ const Keyboard = struct {
     fn onMods(k: *Keyboard, _: ?*anyopaque) void {
         c.wlr_seat_set_keyboard(s.seat, k.wlr);
         c.wlr_seat_keyboard_notify_modifiers(s.seat, &k.wlr.modifiers);
+        shell.modifiers(k.wlr.modifiers.group);
     }
 
     fn onKey(k: *Keyboard, data: ?*anyopaque) void {
@@ -295,7 +297,10 @@ fn motion(time: u32) void {
     s.hover = h.view;
     if (h.view == null and h.layer == null) {
         // empty desktop: the monitor under the cursor becomes the active one
-        if (outmod.outputOf(c.wlr_output_layout_output_at(s.output_layout, cx, cy))) |o| s.mon = o;
+        if (outmod.outputOf(c.wlr_output_layout_output_at(s.output_layout, cx, cy))) |o| if (s.mon != o) {
+            s.mon = o;
+            shell.touch();
+        };
     }
     if (h.surface) |sf| {
         cursor_default = false;

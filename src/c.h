@@ -66,3 +66,5 @@
 #include <wlr/util/box.h>
 #include <wlr/util/edges.h>
 #include <wlr/util/log.h>
+
+#include "refurs-shell-unstable-v1-protocol.h"

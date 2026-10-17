@@ -14,6 +14,7 @@ const Box = wm.Box;
 const Listener = wm.Listener;
 const client = @import("client.zig");
 const launcher = @import("launcher.zig");
+const shell = @import("shell.zig");
 const s = &wm.s;
 const zero = std.mem.zeroes(Listener);
 
@@ -53,6 +54,8 @@ pub const View = struct {
     l_maximize: Listener = zero,
     l_deco_mode: Listener = zero,
     l_deco_destroy: Listener = zero,
+    l_title: Listener = zero,
+    l_app_id: Listener = zero,
 
     pub fn surface(v: *View) *c.struct_wlr_surface {
         return v.xdg.base.*.surface;
@@ -257,7 +260,7 @@ pub const View = struct {
         if (v.mapped) v.onUnmap(null);
         wm.detach(v);
         wm.unstack(v);
-        for ([_]*Listener{ &v.l_map, &v.l_unmap, &v.l_commit, &v.l_destroy, &v.l_move, &v.l_resize, &v.l_fullscreen, &v.l_maximize, &v.l_deco_mode, &v.l_deco_destroy }) |l| wm.off(l);
+        for ([_]*Listener{ &v.l_map, &v.l_unmap, &v.l_commit, &v.l_destroy, &v.l_move, &v.l_resize, &v.l_fullscreen, &v.l_maximize, &v.l_deco_mode, &v.l_deco_destroy, &v.l_title, &v.l_app_id }) |l| wm.off(l);
         c.wlr_scene_node_destroy(&v.tree.node);
         client.give(v.owner, .views);
         wm.gpa.destroy(v);
@@ -280,6 +283,11 @@ pub const View = struct {
     fn onMaximize(v: *View, _: ?*anyopaque) void {
         // tiling decides sizes; still answer so the client is not left waiting
         if (v.xdg.base.*.initialized) _ = c.wlr_xdg_surface_schedule_configure(v.xdg.base);
+    }
+
+    /// The bar shows the focused window's title: other windows may retitle themselves for free.
+    fn onTitle(v: *View, _: ?*anyopaque) void {
+        if (s.focused == v) shell.touch();
     }
 
     fn onDecoMode(v: *View, _: ?*anyopaque) void {
@@ -323,6 +331,8 @@ fn newView(xdg: *c.struct_wlr_xdg_toplevel, owner: *client.State) !void {
     wm.on(&xdg.events.request_resize, &v.l_resize, wm.cb(View, "l_resize", View.onResize));
     wm.on(&xdg.events.request_fullscreen, &v.l_fullscreen, wm.cb(View, "l_fullscreen", View.onFullscreen));
     wm.on(&xdg.events.request_maximize, &v.l_maximize, wm.cb(View, "l_maximize", View.onMaximize));
+    wm.on(&xdg.events.set_title, &v.l_title, wm.cb(View, "l_title", View.onTitle));
+    wm.on(&xdg.events.set_app_id, &v.l_app_id, wm.cb(View, "l_app_id", View.onTitle));
 }
 
 pub fn viewOfToplevel(xdg: *c.struct_wlr_xdg_toplevel) ?*View {

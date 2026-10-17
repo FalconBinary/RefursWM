@@ -17,6 +17,7 @@ const policy = @import("policy.zig");
 const client = @import("client.zig");
 const view = @import("view.zig");
 const outmod = @import("output.zig");
+const shell = @import("shell.zig");
 pub const Output = outmod.Output;
 pub const LayerSurf = outmod.LayerSurf;
 
@@ -257,12 +258,14 @@ pub fn focusView(target: ?*View, scroll: bool) void {
     if (s.locked) return;
     const prev = s.focused;
     const v = target orelse {
+        shell.touch();
         s.focused = null;
         if (prev) |p| p.activate(false);
         if (s.layer_focus == null) c.wlr_seat_keyboard_clear_focus(s.seat);
         return;
     };
     if (!v.mapped) return;
+    defer shell.touch();
     s.focused = v;
     stackRemove(v);
     s.stack.insert(gpa, 0, v) catch {};
@@ -311,6 +314,8 @@ pub fn area(o: *Output) Box {
 }
 
 pub fn arrange(n: u8, scroll_to: ?*View) void {
+    // workspaces, occupancy and modes all pass through here
+    shell.touch();
     const ws = &s.ws[n];
     const o = ws.output orelse return;
     switch (ws.mode) {
@@ -593,8 +598,9 @@ pub fn resizeView(v: *View, dx: i32, dy: i32, grow: bool) void {
     arrange(v.ws, if (grow) v else null);
 }
 
-fn toggleTheme() void {
+pub fn toggleTheme() void {
     s.theme = if (s.theme == .dark) .light else .dark;
+    shell.touch();
     for (s.views.items) |v| v.recolor();
     for (s.outputs.items) |o| c.wlr_scene_rect_set_color(o.bg, &premul(palette().background));
     themeHooks();
@@ -615,6 +621,7 @@ pub fn run(comptime a: T.Action) void {
         .quit => c.wl_display_terminate(s.display),
         .lock => launcher.spawn(cfg.lock_command, false),
         .toggle_theme => toggleTheme(),
+        .bar => |m| shell.open(m),
         .workspace => |n| if (n >= 1 and n <= WS) showWorkspace(n - 1),
         .toggle_mode => if (s.mon) |o| toggleMode(o.ws),
         .focus => |d| focusDir(d),
